@@ -1,0 +1,43 @@
+# Environment and secrets
+.env
+.streamlit/secrets.toml
+
+# Session outputs (ephemeral on Streamlit Cloud)
+outputs/
+history/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local testing artifacts
+*.png
+*.dot
+flowchart_*
+LLM_output_axis.json
+cost_metrics.json
+output.json
+clustered_flow_report.txt
+clustered_flow_report.xlsx
+
+# Claude plans
+.claude/
