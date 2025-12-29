@@ -155,7 +155,7 @@ else:
         label_visibility="collapsed"
     )
 
-    col1, col2 = st.columns([1, 5])
+    col1, col2 = st.columns([2, 5])
     with col1:
         generate_button = st.button("Generate Test Cases", type="primary", disabled=st.session_state.pipeline_running)
     with col2:
