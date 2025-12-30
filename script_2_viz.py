@@ -22,20 +22,22 @@ def generate_flowchart(json_data, output_base_name='flowchart_claude'):
     # Filter valid transitions (all required fields must be non-null)
     valid_transitions = [
         t for t in transitions
-        if t.get('from_state') and t.get('to_state') and t.get('trigger_intent')
+        if t.get('from_state') and t.get('to_state')
     ]
 
     # Log skipped transitions for debugging
     skipped_count = len(transitions) - len(valid_transitions)
     if skipped_count > 0:
-        print(f"Note: Skipped {skipped_count} transition(s) with missing/null fields (likely terminal states)")
+        print(f"Note: Skipped {skipped_count} transition(s) missing from/to states")
 
     dot = graphviz.Digraph(comment='Voice Agent Flow', format='png')
     dot.attr(rankdir='TB')
     dot.attr('node', shape='box', style='rounded,filled', fillcolor='#E3F2FD')
 
     for item in valid_transitions:
-        dot.edge(item['from_state'], item['to_state'], label=item['trigger_intent'])
+        # If trigger_intent is None/NULL, use an empty string "" (or use "(auto)")
+        label_text = item.get('trigger_intent') or ""
+        dot.edge(item['from_state'], item['to_state'], label=label_text)
 
     png_path = dot.render(output_base_name, view=False)
     dot_source_path = output_base_name  # Graphviz creates this
