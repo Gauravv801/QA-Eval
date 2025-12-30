@@ -99,7 +99,7 @@ def get_path_signature(path_tuples, start_node=None, end_node=None):
     return collapsed
 
 def cluster_paths(all_paths, start_node=None, end_node=None):
-    """Cluster paths by similarity"""
+    """Cluster paths by similarity using Best-Fit logic"""
     # Sort by length for clean P0s
     path_data = []
     for p in all_paths:
@@ -113,7 +113,10 @@ def cluster_paths(all_paths, start_node=None, end_node=None):
     clusters = []
 
     for current in path_data:
-        assigned = False
+        best_cluster = None
+        best_score = -1.0
+        
+        # PASS 1: Check ALL existing clusters to find the highest score
         for cluster in clusters:
             p0_sig = cluster['p0']['signature']
             curr_sig = current['signature']
@@ -121,16 +124,18 @@ def cluster_paths(all_paths, start_node=None, end_node=None):
             matcher = difflib.SequenceMatcher(None, p0_sig, curr_sig)
             score = matcher.ratio()
 
-            if score >= THRESHOLD_P2_IDENTICAL:
-                cluster['p2'].append(current)
-                assigned = True
-                break
-            elif score >= THRESHOLD_P1_VARIATION:
-                cluster['p1'].append(current)
-                assigned = True
-                break
+            # Keep track of the winner (highest score found so far)
+            if score > best_score:
+                best_score = score
+                best_cluster = cluster
 
-        if not assigned:
+        # PASS 2: Assign to the best winner found (if it meets thresholds)
+        if best_cluster and best_score >= THRESHOLD_P2_IDENTICAL:
+            best_cluster['p2'].append(current)
+        elif best_cluster and best_score >= THRESHOLD_P1_VARIATION:
+            best_cluster['p1'].append(current)
+        else:
+            # If no existing cluster was close enough, create a new one
             clusters.append({'p0': current, 'p1': [], 'p2': []})
 
     return clusters

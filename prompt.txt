@@ -23,6 +23,13 @@ Equal Weight: Give equal analytical weight to implied logic in auxiliary section
 * **Naming Convention:** `STATE_[MODE]` (e.g., STATE_AWAITING_PAYMENT, STATE_VALIDATING_USER).
 * **Consolidation Rule:** If the bot needs to collect multiple pieces of information (e.g., Name, Date, and ID) to proceed, do NOT create separate states for each item (e.g., STATE_GET_NAME, STATE_GET_DATE). Instead, create a single Composite State (e.g., STATE_COLLECTING_DETAILS).
 * **Constraint:** Only list states explicitly handled by the logic. Do not document flow here, only the existence of the state.
+* **Description of bot states:**
+- The description field for every bot state must NOT be a generic summary (e.g., "Bot asks for name"). It must be a Behavioral Contract used for QA testing.
+- Schema: You must format the description as a structured string containing three specific components:
+1. GOAL: The functional objective of this state.
+2. SCRIPTING: Specific phrases, questions, or data points the bot is required to articulate.
+3. TONE AND CONSTRAINTS: Tone instructions, forbidden words, or timing rules.
+- Format Template: GOAL: [Objective] | SCRIPTING: [Required Output] | TONE AND CONSTRAINTS: [Rules]
 
 ## 3. Agent Tools (Hard Actions)
 * **Definition:** Backend actions, API calls, or termination events explicitly described (e.g., hanging up, querying a database).
