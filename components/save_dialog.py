@@ -3,6 +3,7 @@ Save Dialog Component - Modal dialog for saving runs to history.
 """
 
 import time
+import tempfile
 import streamlit as st
 from pathlib import Path
 from services.history_service import HistoryService
@@ -61,7 +62,8 @@ def show_save_dialog(session_id, agent_prompt, fsm_instructions,
         if st.button("Save", type="primary", use_container_width=True):
             history_service = HistoryService()
             try:
-                history_service.save_current_run(
+                # Get Supabase URLs and text content from save operation
+                saved_data = history_service.save_current_run(
                     session_id,
                     agent_prompt,
                     fsm_instructions,
@@ -71,13 +73,16 @@ def show_save_dialog(session_id, agent_prompt, fsm_instructions,
                 )
                 st.success(f"Run saved to history")
 
-                # Update file paths to point to new history location (absolute paths)
-                session_dir = Path(f"history/{session_id}").resolve()
-                st.session_state.flowchart_png_path = str(session_dir / "flowchart.png")
-                st.session_state.flowchart_dot_path = str(session_dir / "flowchart_source")
-                st.session_state.report_path = str(session_dir / "clustered_flow_report.txt")
-                if st.session_state.excel_report_path:
-                    st.session_state.excel_report_path = str(session_dir / "clustered_flow_report.xlsx")
+                # Create temp file for report text (mirrors load_run_data behavior)
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp:
+                    tmp.write(saved_data['report_text'])
+                    report_temp_path = tmp.name
+
+                # Update session state with Supabase URLs and content
+                st.session_state.flowchart_png_path = saved_data['flowchart_png_path']  # URL
+                st.session_state.flowchart_dot_path = saved_data['flowchart_dot_path']  # Text
+                st.session_state.report_path = report_temp_path                          # Temp file
+                st.session_state.excel_report_path = saved_data.get('excel_report_path') # URL or None
 
                 # Mark run as saved to prevent duplicate saves
                 st.session_state.run_saved_to_history = True

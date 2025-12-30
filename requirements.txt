@@ -11,3 +11,6 @@ Pillow>=10.2.0
 # Excel export dependencies
 pandas>=2.0.0
 openpyxl>=3.1.0
+
+# Database persistence (Supabase)
+supabase>=2.3.0

@@ -46,13 +46,26 @@ def render_results_zone(clusters, report_path):
             )
 
     with col2:
-        if st.session_state.excel_report_path and os.path.exists(st.session_state.excel_report_path):
-            with open(st.session_state.excel_report_path, 'rb') as f:
-                st.download_button(
+        excel_path = st.session_state.excel_report_path
+        if excel_path:
+            # Check if it's a URL (historical run from Supabase) or local file
+            if excel_path.startswith('http'):
+                # Historical run - direct link to Supabase Storage
+                st.markdown(f"[Download XLSX Report]({excel_path})")
+            elif os.path.exists(excel_path):
+                # Active run - local file download
+                with open(excel_path, 'rb') as f:
+                    st.download_button(
+                        "Download XLSX Report",
+                        f.read(),
+                        file_name="clustered_flow_report.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+            else:
+                st.button(
                     "Download XLSX Report",
-                    f.read(),
-                    file_name="clustered_flow_report.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    disabled=True,
+                    help="Excel export not available"
                 )
         else:
             st.button(

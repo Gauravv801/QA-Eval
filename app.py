@@ -1,5 +1,11 @@
 import streamlit as st
 import time
+import re
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (must be before other imports)
+load_dotenv()
+
 from utils.session_state import SessionStateManager
 from utils.file_manager import FileManager
 from services.streaming_service import StreamingService
@@ -15,8 +21,6 @@ from components.results_zone import render_results_zone
 from components.top_navigation import render_top_navigation
 from components.history_table import render_history_table, format_datetime
 from components.save_dialog import show_save_dialog
-
-import re
 
 def normalize_line_breaks(text: str) -> str:
     """

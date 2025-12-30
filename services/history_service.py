@@ -1,25 +1,23 @@
 """
 History Service - Business logic layer for run history management.
 
-Provides high-level operations for saving and loading historical runs, including:
-- Saving current run with computed metadata
-- Loading all artifacts from a session directory
-- Formatting runs for table display
-- Deleting runs with directory cleanup
+Migrated to use Supabase for persistent storage (database + object storage).
+Provides high-level operations for saving and loading historical runs.
 """
-
-import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+import shutil
+import tempfile
 
 from utils.history_manager import HistoryManager
+from utils.database_client import DatabaseClient
 from utils.file_manager import FileManager
 from services.report_parser import ReportParser
 
 
 class HistoryService:
-    """High-level service for managing run history."""
+    """High-level service for managing run history with Supabase."""
 
     def __init__(self, file_manager: Optional[FileManager] = None):
         """
@@ -30,6 +28,7 @@ class HistoryService:
         """
         self.history_manager = HistoryManager()
         self.file_manager = file_manager
+        self.supabase = DatabaseClient.get_client()
 
     def save_current_run(
         self,
@@ -39,29 +38,26 @@ class HistoryService:
         notes: str,
         cost_metrics: dict,
         parsed_clusters: list
-    ) -> None:
+    ) -> dict:
         """
-        Save current run to history with directory move and metadata registry.
+        Save current run to Supabase database and storage.
 
         Process:
             1. Validate session directory exists in outputs/
-            2. Move outputs/{session_id}/ -> history/{session_id}/
-            3. Add metadata to registry
-            4. Rollback move if registry update fails
+            2. Upload binary files (PNG, XLSX) to Supabase Storage
+            3. Insert all data into database
+            4. Delete local outputs/{session_id}/ directory
 
         Args:
             session_id: UUID session identifier
             agent_prompt: Voice agent system prompt (full text)
             fsm_instructions: FSM extraction instructions (full text)
             notes: User-entered notes/comments
-            cost_metrics: Dictionary with 'total_cost_usd', 'input_tokens', etc.
+            cost_metrics: Dictionary with 'total_cost_usd', etc.
             parsed_clusters: List of Cluster objects from ReportParser
 
-        Returns:
-            None
-
         Raises:
-            RuntimeError: If session directory doesn't exist or move fails
+            RuntimeError: If session directory doesn't exist or upload fails
         """
         # Validate source directory exists
         source_dir = Path(f"outputs/{session_id}")
@@ -71,135 +67,169 @@ class HistoryService:
                 "Cannot save run without completed session outputs."
             )
 
-        # Validate destination doesn't exist (prevent overwrites)
-        dest_dir = Path(f"history/{session_id}")
-        if dest_dir.exists():
-            raise RuntimeError(
-                f"History directory already exists: {dest_dir}. "
-                "This session may have been saved previously."
-            )
+        # Load all artifacts from local session
+        fm = FileManager(session_id, base_location='outputs')
 
-        # Compute metadata
-        metadata = {
-            "session_id": session_id,
-            "saved_at": datetime.now().isoformat(),
-            "agent_prompt_preview": agent_prompt[:100] if len(agent_prompt) > 100 else agent_prompt,
-            "fsm_instructions_preview": fsm_instructions[:100] if len(fsm_instructions) > 100 else fsm_instructions,
-            "notes": notes,
-            "total_cost_usd": cost_metrics.get('total_cost_usd', 0.0),
-            "num_archetypes": len(parsed_clusters),
-            "num_total_paths": sum(
-                1 + len(c.p1_paths) + len(c.p2_paths)
-                for c in parsed_clusters
-            )
-        }
-
-        # Atomic operation: Move directory, then update registry
         try:
-            # Move directory to history/
-            dest_dir.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source_dir), str(dest_dir))
+            # Load text/JSON data
+            output_json = fm.load_json('output.json')
+            thinking_text = fm.load_text('thinking.txt')
+            flowchart_dot = fm.load_text('flowchart_source')
+            report_text = fm.load_text('clustered_flow_report.txt')
 
-            # Add to registry
+            # Load optional raw response
+            try:
+                raw_response = fm.load_text('raw_response.txt')
+            except FileNotFoundError:
+                raw_response = None
+
+            # Upload binary files to Supabase Storage
+            flowchart_png_path = self._upload_file(
+                session_id,
+                source_dir / 'flowchart.png',
+                'flowchart.png'
+            )
+
+            # Upload Excel if exists
+            excel_path_local = source_dir / 'clustered_flow_report.xlsx'
+            if excel_path_local.exists():
+                excel_report_path = self._upload_file(
+                    session_id,
+                    excel_path_local,
+                    'report.xlsx'
+                )
+            else:
+                excel_report_path = None
+
+            # Compute metadata
+            metadata = {
+                "session_id": session_id,
+                "saved_at": datetime.now().isoformat(),
+                "agent_prompt_preview": agent_prompt[:100] if len(agent_prompt) > 100 else agent_prompt,
+                "fsm_instructions_preview": fsm_instructions[:100] if len(fsm_instructions) > 100 else fsm_instructions,
+                "notes": notes,
+                "total_cost_usd": float(cost_metrics.get('total_cost_usd', 0.0)),
+                "num_archetypes": len(parsed_clusters),
+                "num_total_paths": sum(
+                    1 + len(c.p1_paths) + len(c.p2_paths)
+                    for c in parsed_clusters
+                ),
+                # Full text fields
+                "agent_prompt_full": agent_prompt,
+                "fsm_instructions_full": fsm_instructions,
+                "output_json": output_json,
+                "cost_metrics": cost_metrics,
+                "thinking_text": thinking_text,
+                "raw_response_text": raw_response,
+                "flowchart_dot_source": flowchart_dot,
+                "clustered_flow_report": report_text,
+                # File references
+                "flowchart_png_path": flowchart_png_path,
+                "excel_report_path": excel_report_path
+            }
+
+            # Insert into database
             self.history_manager.add_run(metadata)
 
-        except Exception as e:
-            # Rollback: Move directory back to outputs if it was moved
-            if dest_dir.exists() and not source_dir.exists():
-                try:
-                    shutil.move(str(dest_dir), str(source_dir))
-                except Exception as rollback_error:
-                    # Critical: Directory in limbo, log for manual intervention
-                    print(f"CRITICAL: Rollback failed - directory stranded at {dest_dir}")
-                    print(f"Original error: {e}")
-                    print(f"Rollback error: {rollback_error}")
+            # Cleanup: Delete local outputs directory
+            shutil.rmtree(source_dir)
 
+            # Return Supabase URLs and text content for session state update
+            return {
+                'flowchart_png_path': flowchart_png_path,      # Supabase URL
+                'flowchart_dot_path': flowchart_dot,            # Text content (DOT source)
+                'report_text': report_text,                     # Text content (clustered report)
+                'excel_report_path': excel_report_path          # Supabase URL or None
+            }
+
+        except Exception as e:
             raise RuntimeError(
-                f"Failed to save run to history: {str(e)}. "
-                "Directory move rolled back."
+                f"Failed to save run to database: {str(e)}"
             ) from e
+
+    def _upload_file(self, session_id: str, local_path: Path, filename: str) -> str:
+        """
+        Upload file to Supabase Storage and return public URL.
+
+        Args:
+            session_id: Session identifier (used as folder)
+            local_path: Local file path
+            filename: Target filename in storage
+
+        Returns:
+            Public URL to uploaded file
+
+        Raises:
+            Exception: If upload fails
+        """
+        storage_path = f"{session_id}/{filename}"
+
+        with open(local_path, 'rb') as f:
+            file_data = f.read()
+
+        # Upload to Supabase Storage
+        response = self.supabase.storage.from_('run-artifacts').upload(
+            storage_path,
+            file_data,
+            file_options={"content-type": self._get_mime_type(filename)}
+        )
+
+        # Get public URL
+        public_url = self.supabase.storage.from_('run-artifacts').get_public_url(storage_path)
+
+        return public_url
+
+    def _get_mime_type(self, filename: str) -> str:
+        """Get MIME type from filename extension."""
+        if filename.endswith('.png'):
+            return 'image/png'
+        elif filename.endswith('.xlsx'):
+            return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        else:
+            return 'application/octet-stream'
 
     def load_run_data(self, session_id: str) -> dict:
         """
-        Load all session data from history/{session_id}/ or outputs/{session_id}/.
-
-        Checks history/ first (saved runs), falls back to outputs/ (legacy/unsaved).
+        Load all session data from database.
 
         Args:
             session_id: UUID session identifier
 
         Returns:
-            Dictionary containing:
-                - output_json: FSM structure
-                - cost_metrics: API costs
-                - thinking_text: Claude thinking output
-                - flowchart_png_path: Path to PNG
-                - flowchart_dot_path: Path to DOT source
-                - report_path: Path to text report
-                - parsed_clusters: List of Cluster objects
-                - excel_report_path: Path to XLSX (or None)
-                - agent_prompt: Original prompt text
-                - fsm_instructions: Original FSM instructions
+            Dictionary containing all run data (same structure as before)
 
         Raises:
-            FileNotFoundError: If session directory not found in either location
+            FileNotFoundError: If session not found in database
         """
-        # Check history/ first (primary location for saved runs)
-        history_dir = Path(f"history/{session_id}")
-        outputs_dir = Path(f"outputs/{session_id}")
+        # Load from database
+        run_data = self.history_manager.get_run(session_id)
 
-        if history_dir.exists():
-            base_location = 'history'
-            session_dir = history_dir
-        elif outputs_dir.exists():
-            base_location = 'outputs'
-            session_dir = outputs_dir
-            # Log warning for legacy location
-            print(f"WARNING: Loading run from outputs/ (legacy location): {session_id}")
-        else:
+        if not run_data:
             raise FileNotFoundError(
-                f"Session directory not found in history/ or outputs/: {session_id}. "
-                "The run may have been deleted manually."
+                f"Session not found in database: {session_id}. "
+                "The run may have been deleted."
             )
 
-        # Create FileManager with appropriate base location
-        file_manager = FileManager(session_id, base_location=base_location)
+        # Parse clustered flow report from text
+        # Create temp file for parser (it expects a file path)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp:
+            tmp.write(run_data['clustered_flow_report'])
+            report_path = tmp.name
 
-        # Load all artifacts
-        output_json = file_manager.load_json('output.json')
-        cost_metrics = file_manager.load_json('cost_metrics.json')
-        thinking_text = file_manager.load_text('thinking.txt')
-
-        # Parse clustered flow report
-        report_path = str(session_dir / 'clustered_flow_report.txt')
         parsed_clusters = ReportParser(report_path).parse()
 
-        # Check if Excel file exists (non-fatal if missing)
-        excel_path = session_dir / 'clustered_flow_report.xlsx'
-        excel_report_path = str(excel_path) if excel_path.exists() else None
-
-        # Load input prompts with fallback for legacy runs
-        try:
-            agent_prompt = file_manager.load_text('agent_prompt.txt')
-        except FileNotFoundError:
-            agent_prompt = '[Not available - legacy run created before prompt persistence]'
-
-        try:
-            fsm_instructions = file_manager.load_text('fsm_instructions.txt')
-        except FileNotFoundError:
-            fsm_instructions = '[Not available - legacy run created before prompt persistence]'
-
+        # Return data in expected format
         return {
-            'output_json': output_json,
-            'cost_metrics': cost_metrics,
-            'thinking_text': thinking_text,
-            'flowchart_png_path': str(session_dir / 'flowchart.png'),
-            'flowchart_dot_path': str(session_dir / 'flowchart_source'),
-            'report_path': str(session_dir / 'clustered_flow_report.txt'),
-            'excel_report_path': excel_report_path,
+            'output_json': run_data['output_json'],
+            'cost_metrics': run_data['cost_metrics'],
+            'thinking_text': run_data['thinking_text'],
+            'flowchart_png_path': run_data.get('flowchart_png_path'),  # Public URL
+            'flowchart_dot_path': run_data['flowchart_dot_source'],  # Text content
+            'report_path': report_path,  # Temp file path
+            'excel_report_path': run_data.get('excel_report_path'),  # Public URL
             'parsed_clusters': parsed_clusters,
-            'agent_prompt': agent_prompt,
-            'fsm_instructions': fsm_instructions
+            'agent_prompt': run_data['agent_prompt_full'],
+            'fsm_instructions': run_data['fsm_instructions_full']
         }
 
     def get_history_table_data(self) -> list[dict]:
@@ -207,47 +237,48 @@ class HistoryService:
         Get all runs formatted for table display.
 
         Returns:
-            List of run metadata dictionaries sorted by saved_at descending (newest first)
+            List of run metadata dictionaries (newest first)
         """
         return self.history_manager.get_all_runs()
 
     def delete_run_with_cleanup(self, session_id: str) -> None:
         """
-        Delete run from registry AND delete session directory from history/.
-
-        Also checks outputs/ for legacy runs and cleans up if found.
+        Delete run from database and remove files from Storage.
 
         Args:
             session_id: UUID session identifier
 
         Raises:
-            RuntimeError: If registry deletion fails
-
-        Note:
-            Directory deletion is non-fatal - continues even if directory missing.
+            RuntimeError: If deletion fails
         """
-        # Delete from registry first (fail-fast)
+        # Get run data to find file paths
+        run_data = self.history_manager.get_run(session_id)
+
+        if not run_data:
+            raise RuntimeError(
+                f"Run with session_id {session_id} not found in database."
+            )
+
+        # Delete files from Storage
+        try:
+            # Delete PNG
+            if run_data.get('flowchart_png_path'):
+                self.supabase.storage.from_('run-artifacts').remove([
+                    f"{session_id}/flowchart.png"
+                ])
+
+            # Delete Excel
+            if run_data.get('excel_report_path'):
+                self.supabase.storage.from_('run-artifacts').remove([
+                    f"{session_id}/report.xlsx"
+                ])
+        except Exception as e:
+            print(f"WARNING: Failed to delete storage files: {e}")
+
+        # Delete from database
         deleted = self.history_manager.delete_run(session_id)
 
         if not deleted:
             raise RuntimeError(
-                f"Run with session_id {session_id} not found in registry. "
-                "Nothing to delete."
+                f"Failed to delete run from database: {session_id}"
             )
-
-        # Delete from history/ (primary location)
-        history_dir = Path(f"history/{session_id}")
-        if history_dir.exists():
-            try:
-                shutil.rmtree(history_dir)
-            except Exception as e:
-                print(f"WARNING: Failed to delete history directory {history_dir}: {e}")
-
-        # Also check outputs/ for legacy runs
-        outputs_dir = Path(f"outputs/{session_id}")
-        if outputs_dir.exists():
-            try:
-                shutil.rmtree(outputs_dir)
-                print(f"INFO: Cleaned up legacy directory from outputs/: {session_id}")
-            except Exception as e:
-                print(f"WARNING: Failed to delete outputs directory {outputs_dir}: {e}")
