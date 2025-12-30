@@ -4,23 +4,29 @@ History Table Component - Interactive table view for run history.
 
 import time
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from services.history_service import HistoryService
 
 
 def format_datetime(iso_timestamp: str) -> str:
     """
-    Format ISO timestamp to DD/MM/YY HH:MM format.
+    Format ISO timestamp to DD/MM/YY HH:MM in IST (UTC+5:30).
 
     Args:
-        iso_timestamp: ISO 8601 format timestamp (e.g., "2025-12-28T18:23:59.112743")
+        iso_timestamp: ISO 8601 format timestamp in UTC
 
     Returns:
-        Formatted string in DD/MM/YY HH:MM format (e.g., "28/12/25 18:23")
+        Formatted string in DD/MM/YY HH:MM format in IST
     """
     try:
-        dt = datetime.fromisoformat(iso_timestamp)
-        return dt.strftime("%d/%m/%y %H:%M")
+        # Parse UTC timestamp
+        dt_utc = datetime.fromisoformat(iso_timestamp)
+
+        # Convert to IST (UTC+5:30)
+        ist_offset = timedelta(hours=5, minutes=30)
+        dt_ist = dt_utc + ist_offset
+
+        return dt_ist.strftime("%d/%m/%y %H:%M")
     except (ValueError, AttributeError):
         # Fallback if parsing fails
         return iso_timestamp[:16]

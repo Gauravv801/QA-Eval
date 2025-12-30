@@ -5,7 +5,7 @@ Migrated to use Supabase for persistent storage (database + object storage).
 Provides high-level operations for saving and loading historical runs.
 """
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import shutil
 import tempfile
@@ -104,7 +104,7 @@ class HistoryService:
             # Compute metadata
             metadata = {
                 "session_id": session_id,
-                "saved_at": datetime.now().isoformat(),
+                "saved_at": datetime.now(timezone.utc).isoformat(),
                 "agent_prompt_preview": agent_prompt[:100] if len(agent_prompt) > 100 else agent_prompt,
                 "fsm_instructions_preview": fsm_instructions[:100] if len(fsm_instructions) > 100 else fsm_instructions,
                 "notes": notes,
