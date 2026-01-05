@@ -84,6 +84,8 @@ elif st.session_state.view_mode == 'history_detail':
         st.session_state.report_path = run_data['report_path']
         st.session_state.parsed_clusters = run_data['parsed_clusters']
         st.session_state.excel_report_path = run_data.get('excel_report_path')
+        st.session_state.agent_prompt = run_data.get('agent_prompt', '')
+        st.session_state.fsm_instructions = run_data.get('fsm_instructions', '')
 
         # Load metadata for banner
         metadata = history_service.history_manager.get_run(
@@ -98,6 +100,25 @@ elif st.session_state.view_mode == 'history_detail':
                 f"P0s: {metadata['num_archetypes']} | "
                 f"Paths: {metadata['num_total_paths']} | "
                 f"Notes: {metadata.get('notes', 'None')}"
+            )
+
+        # Display input prompts (collapsible)
+        with st.expander("📋 FSM Extraction Instructions", expanded=False):
+            st.text_area(
+                label="FSM Instructions",
+                value=st.session_state.get('fsm_instructions', 'No FSM instructions available'),
+                height=200,
+                disabled=True,
+                label_visibility="collapsed"
+            )
+
+        with st.expander("🤖 Voice Agent System Prompt", expanded=False):
+            st.text_area(
+                label="Agent Prompt",
+                value=st.session_state.get('agent_prompt', 'No agent prompt available'),
+                height=300,
+                disabled=True,
+                label_visibility="collapsed"
             )
 
         # Render 3-tab interface (reuse existing components)
