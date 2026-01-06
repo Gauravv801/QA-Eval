@@ -10,6 +10,7 @@ from utils.session_state import SessionStateManager
 from utils.file_manager import FileManager
 from services.streaming_service import StreamingService
 from services.visualization_service import VisualizationService
+from services.interactive_visualization_service import InteractiveVisualizationService
 from services.analysis_service import AnalysisService
 from services.excel_service import ExcelService
 from services.report_parser import ReportParser
@@ -17,6 +18,7 @@ from services.history_service import HistoryService
 from components.execution_zone import render_thinking_console
 from components.analysis_zone import render_analysis_zone
 from components.visual_zone import render_visual_zone
+from components.interactive_zone import render_interactive_zone
 from components.results_zone import render_results_zone
 from components.top_navigation import render_top_navigation
 from components.history_table import render_history_table, format_datetime
@@ -81,6 +83,7 @@ elif st.session_state.view_mode == 'history_detail':
         st.session_state.thinking_text = run_data['thinking_text']
         st.session_state.flowchart_png_path = run_data['flowchart_png_path']
         st.session_state.flowchart_dot_path = run_data['flowchart_dot_path']
+        st.session_state.flowchart_html_path = run_data.get('flowchart_html_path')
         st.session_state.report_path = run_data['report_path']
         st.session_state.parsed_clusters = run_data['parsed_clusters']
         st.session_state.excel_report_path = run_data.get('excel_report_path')
@@ -121,8 +124,8 @@ elif st.session_state.view_mode == 'history_detail':
                 label_visibility="collapsed"
             )
 
-        # Render 3-tab interface (reuse existing components)
-        tab1, tab2, tab3 = st.tabs(["LLM Output", "Flowchart", "Clustered Paths"])
+        # Render 4-tab interface (reuse existing components)
+        tab1, tab2, tab3, tab4 = st.tabs(["LLM Output", "Flowchart", "Interactive", "Clustered Paths"])
 
         with tab1:
             if st.session_state.thinking_text:
@@ -138,6 +141,12 @@ elif st.session_state.view_mode == 'history_detail':
                                   st.session_state.flowchart_dot_path)
 
         with tab3:
+            if st.session_state.flowchart_html_path:
+                render_interactive_zone(st.session_state.flowchart_html_path)
+            else:
+                st.info("Interactive visualization not available for this run.")
+
+        with tab4:
             if st.session_state.parsed_clusters:
                 render_results_zone(st.session_state.parsed_clusters,
                                    st.session_state.report_path)
@@ -271,6 +280,18 @@ else:
                 st.session_state.flowchart_png_path = png_path
                 st.session_state.flowchart_dot_path = dot_path
 
+            # STEP 2B: Interactive Visualization
+            interactive_viz_service = InteractiveVisualizationService(file_manager)
+
+            with st.spinner("Creating interactive flowchart..."):
+                try:
+                    html_path = interactive_viz_service.create_interactive_flowchart(json_data)
+                    st.session_state.flowchart_html_path = html_path
+                    st.session_state.interactive_error = None # Clear previous errors
+                except Exception as e:
+                    st.session_state.flowchart_html_path = None
+                    st.session_state.interactive_error = str(e) # Persist error
+
             # STEP 3: Analysis
             st.session_state.current_step = 3
 
@@ -318,7 +339,7 @@ else:
 
     # Tabbed Results Display (visible immediately after clicking Generate)
     if st.session_state.pipeline_running or st.session_state.current_step > 0:
-        tab1, tab2, tab3 = st.tabs(["LLM Output", "Flowchart", "Clustered Paths"])
+        tab1, tab2, tab3, tab4 = st.tabs(["LLM Output", "Flowchart", "Interactive", "Clustered Paths"])
 
         with tab1:
             # Thinking Console
@@ -339,6 +360,15 @@ else:
                 st.info("Waiting for flowchart generation... Complete Step 1 first.")
 
         with tab3:
+            # Interactive Zone (Interactive Flowchart)
+            if st.session_state.get('flowchart_html_path'):
+                render_interactive_zone(st.session_state.flowchart_html_path)
+            elif st.session_state.get('interactive_error'):
+                st.error(f"Interactive Visualization Failed: {st.session_state.interactive_error}")
+            else:
+                st.info("Waiting for interactive flowchart... Complete Step 1 first.")
+
+        with tab4:
             # Results Zone (Clustered Paths)
             if st.session_state.parsed_clusters:
                 render_results_zone(st.session_state.parsed_clusters, st.session_state.report_path)

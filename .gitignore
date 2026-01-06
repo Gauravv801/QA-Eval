@@ -41,3 +41,7 @@ clustered_flow_report.xlsx
 
 # Claude plans
 .claude/
+
+# Node.js
+node_modules/
+package-lock.json

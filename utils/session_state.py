@@ -70,6 +70,9 @@ class SessionStateManager:
         if 'flowchart_dot_path' not in st.session_state:
             st.session_state.flowchart_dot_path = None
 
+        if 'flowchart_html_path' not in st.session_state:
+            st.session_state.flowchart_html_path = None
+
         if 'report_path' not in st.session_state:
             st.session_state.report_path = None
 
@@ -149,6 +152,7 @@ class SessionStateManager:
         st.session_state.cost_metrics = None
         st.session_state.flowchart_png_path = None
         st.session_state.flowchart_dot_path = None
+        st.session_state.flowchart_html_path = None
         st.session_state.report_path = None
         st.session_state.parsed_clusters = None
         st.session_state.excel_report_path = None

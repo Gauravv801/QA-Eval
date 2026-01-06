@@ -90,6 +90,13 @@ class HistoryService:
                 'flowchart.png'
             )
 
+            # Upload interactive HTML
+            flowchart_html_path = self._upload_file(
+                session_id,
+                source_dir / 'flowchart_interactive.html',
+                'flowchart_interactive.html'
+            )
+
             # Upload Excel if exists
             excel_path_local = source_dir / 'clustered_flow_report.xlsx'
             if excel_path_local.exists():
@@ -125,6 +132,7 @@ class HistoryService:
                 "clustered_flow_report": report_text,
                 # File references
                 "flowchart_png_path": flowchart_png_path,
+                "flowchart_html_path": flowchart_html_path,
                 "excel_report_path": excel_report_path
             }
 
@@ -137,6 +145,7 @@ class HistoryService:
             # Return Supabase URLs and text content for session state update
             return {
                 'flowchart_png_path': flowchart_png_path,      # Supabase URL
+                'flowchart_html_path': flowchart_html_path,    # Supabase URL
                 'flowchart_dot_path': flowchart_dot,            # Text content (DOT source)
                 'report_text': report_text,                     # Text content (clustered report)
                 'excel_report_path': excel_report_path          # Supabase URL or None
@@ -171,7 +180,11 @@ class HistoryService:
         response = self.supabase.storage.from_('run-artifacts').upload(
             storage_path,
             file_data,
-            file_options={"content-type": self._get_mime_type(filename)}
+            file_options={
+                "contentType": self._get_mime_type(filename),  # camelCase for Supabase SDK
+                "cacheControl": "3600",
+                "upsert": "true"
+            }
         )
 
         # Get public URL
@@ -183,6 +196,8 @@ class HistoryService:
         """Get MIME type from filename extension."""
         if filename.endswith('.png'):
             return 'image/png'
+        elif filename.endswith('.html'):
+            return 'text/html'
         elif filename.endswith('.xlsx'):
             return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         else:
@@ -224,6 +239,7 @@ class HistoryService:
             'cost_metrics': run_data['cost_metrics'],
             'thinking_text': run_data['thinking_text'],
             'flowchart_png_path': run_data.get('flowchart_png_path'),  # Public URL
+            'flowchart_html_path': run_data.get('flowchart_html_path'),  # Public URL
             'flowchart_dot_path': run_data['flowchart_dot_source'],  # Text content
             'report_path': report_path,  # Temp file path
             'excel_report_path': run_data.get('excel_report_path'),  # Public URL
@@ -265,6 +281,12 @@ class HistoryService:
             if run_data.get('flowchart_png_path'):
                 self.supabase.storage.from_('run-artifacts').remove([
                     f"{session_id}/flowchart.png"
+                ])
+
+            # Delete HTML
+            if run_data.get('flowchart_html_path'):
+                self.supabase.storage.from_('run-artifacts').remove([
+                    f"{session_id}/flowchart_interactive.html"
                 ])
 
             # Delete Excel

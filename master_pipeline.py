@@ -7,6 +7,7 @@ import time
 # --- CONFIGURATION: Match these to your actual filenames ---
 SCRIPT_1 = "script_1_gen.py"
 SCRIPT_2 = "script_2_viz.py"
+SCRIPT_INTERACTIVE = "script_viz_interactive.py"
 SCRIPT_3 = "script_3_ana.py"
 
 def run_script(script_name):
@@ -54,6 +55,9 @@ if __name__ == "__main__":
     # BRIDGE 2: Connect Script 2 (flowchart_claude) to Script 3 (flowchart_collections_std)
     # We copy the source file (no extension) because Script 3 parses the text, not the PNG.
     bridge_files("flowchart_claude", "flowchart_collections_std")
+
+    # --- STEP 2B: INTERACTIVE VISUALIZATION ---
+    run_script(SCRIPT_INTERACTIVE)
 
     # --- STEP 3: ANALYSIS ---
     run_script(SCRIPT_3)

@@ -80,6 +80,7 @@ def show_save_dialog(session_id, agent_prompt, fsm_instructions,
 
                 # Update session state with Supabase URLs and content
                 st.session_state.flowchart_png_path = saved_data['flowchart_png_path']  # URL
+                st.session_state.flowchart_html_path = saved_data['flowchart_html_path']  # URL
                 st.session_state.flowchart_dot_path = saved_data['flowchart_dot_path']  # Text
                 st.session_state.report_path = report_temp_path                          # Temp file
                 st.session_state.excel_report_path = saved_data.get('excel_report_path') # URL or None
