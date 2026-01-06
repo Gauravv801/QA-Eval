@@ -14,3 +14,5 @@ openpyxl>=3.1.0
 
 # Database persistence (Supabase)
 supabase>=2.3.0
+
+pyvis
