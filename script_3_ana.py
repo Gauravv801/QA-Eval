@@ -46,14 +46,15 @@ def find_paths_with_one_loop(graph, current_node, end_node, path, visited_counts
         
         # Constraint: Allow max 2 visits to handle single loops
         if count < 2:
-            visited_counts[neighbor] = count + 1
+            new_visited = visited_counts.copy()
+            new_visited[neighbor] = count + 1
             
             # Iterate through all edges (actions) between these nodes
             for key in graph[current_node][neighbor]:
                 edge_data = graph[current_node][neighbor][key]
                 new_segment = (current_node, neighbor, edge_data['action'])
                 yield from find_paths_with_one_loop(
-                    graph, neighbor, end_node, path + [new_segment], visited_counts.copy()
+                    graph, neighbor, end_node, path + [new_segment], new_visited
                 )
 
 # --- 3. CLUSTERING & SMART DIFF OUTPUT ---

@@ -24,6 +24,9 @@ from components.top_navigation import render_top_navigation
 from components.history_table import render_history_table, format_datetime
 from components.save_dialog import show_save_dialog
 
+# Fixed header for system prompt input
+SYSTEM_PROMPT_HEADER = "## System Prompt\n"
+
 def normalize_line_breaks(text: str) -> str:
     """
     Normalize line breaks in text to have at most one blank line between paragraphs.
@@ -188,13 +191,22 @@ else:
     st.subheader("2. Voice Agent System Prompt to Analyze")
     st.caption("Paste the voice agent system prompt you want to convert into an FSM")
 
-    agent_prompt = st.text_area(
-        label="Voice Agent System Prompt",
+    # Display fixed header (read-only)
+    st.markdown("```markdown\n## System Prompt\n```")
+    st.caption("⬆️ This header is automatically included and cannot be edited")
+
+    # User input area (editable)
+    user_prompt_content = st.text_area(
+        label="Voice Agent System Prompt Content",
         height=300,
-        placeholder="You are **AgentName**, an AI assistant...\n\n[Paste your voice agent system prompt here]",
+        placeholder="You are **AgentName**, an AI assistant...\n\n[Paste your voice agent system prompt content here]",
         disabled=st.session_state.pipeline_running,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="user_prompt_input"
     )
+
+    # Combine fixed header with user content
+    agent_prompt = SYSTEM_PROMPT_HEADER + user_prompt_content
 
     col1, col2 = st.columns([2, 5])
     with col1:
@@ -209,8 +221,8 @@ else:
         # Validate both inputs are present
         if not fsm_instructions.strip():
             st.error("FSM Extraction Instructions cannot be empty")
-        elif not agent_prompt.strip():
-            st.error("Voice Agent System Prompt cannot be empty")
+        elif not user_prompt_content.strip():
+            st.error("Voice Agent System Prompt content cannot be empty")
         else:
             # Use fsm_instructions as system prompt and agent_prompt as user message
             sys_prompt = fsm_instructions.strip()
