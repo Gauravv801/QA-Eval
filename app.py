@@ -86,6 +86,7 @@ elif st.session_state.view_mode == 'history_detail':
         st.session_state.flowchart_html_path = run_data.get('flowchart_html_path')
         st.session_state.report_path = run_data['report_path']
         st.session_state.parsed_clusters = run_data['parsed_clusters']
+        st.session_state.is_priority_mode = run_data['is_priority_mode']  # NEW: Set format flag
         st.session_state.excel_report_path = run_data.get('excel_report_path')
         st.session_state.agent_prompt = run_data.get('agent_prompt', '')
         st.session_state.fsm_instructions = run_data.get('fsm_instructions', '')
@@ -148,8 +149,14 @@ elif st.session_state.view_mode == 'history_detail':
 
         with tab4:
             if st.session_state.parsed_clusters:
-                render_results_zone(st.session_state.parsed_clusters,
-                                   st.session_state.report_path)
+                # Conditional rendering based on format
+                if st.session_state.is_priority_mode:
+                    from components.results_zone import render_results_zone_priority
+                    render_results_zone_priority(st.session_state.parsed_clusters,
+                                                st.session_state.report_path)
+                else:
+                    render_results_zone(st.session_state.parsed_clusters,
+                                       st.session_state.report_path)
 
     except FileNotFoundError:
         st.error("Run data not found. Directory may have been deleted.")
@@ -298,18 +305,20 @@ else:
             analysis_service = AnalysisService(file_manager)
 
             with st.spinner("Analyzing conversation paths..."):
-                report_path = analysis_service.analyze_paths(dot_path)
+                # NEW: analyze_paths now returns tuple (priority_collection, report_path)
+                priority_collection, report_path = analysis_service.analyze_paths(dot_path)
+
                 st.session_state.report_path = report_path
+                st.session_state.parsed_clusters = priority_collection  # Now PriorityPathCollection
+                st.session_state.is_priority_mode = True  # Flag for rendering
 
-                # Parse report
-                parser = ReportParser(report_path)
-                clusters = parser.parse()
-                st.session_state.parsed_clusters = clusters
-
-                # Generate Excel report
+                # Generate Excel report using new priority method
                 excel_service = ExcelService(file_manager)
                 try:
-                    excel_path = excel_service.generate_excel(clusters, st.session_state.output_json)
+                    excel_path = excel_service.generate_excel_priority(
+                        priority_collection,
+                        st.session_state.output_json
+                    )
                     st.session_state.excel_report_path = excel_path
                     st.session_state.excel_error = None  # Clear any previous error
                 except Exception as e:
@@ -371,7 +380,12 @@ else:
         with tab4:
             # Results Zone (Clustered Paths)
             if st.session_state.parsed_clusters:
-                render_results_zone(st.session_state.parsed_clusters, st.session_state.report_path)
+                # Conditional rendering based on format
+                if st.session_state.is_priority_mode:
+                    from components.results_zone import render_results_zone_priority
+                    render_results_zone_priority(st.session_state.parsed_clusters, st.session_state.report_path)
+                else:
+                    render_results_zone(st.session_state.parsed_clusters, st.session_state.report_path)
             else:
                 st.info("Waiting for path analysis... Complete Step 2 first.")
 

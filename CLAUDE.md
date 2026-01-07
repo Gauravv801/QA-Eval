@@ -13,10 +13,14 @@ Sequential steps:
 1. **FSM Generation** (`script_1_gen.py`): Calls Claude API with extended thinking to analyze prompts → `output.json`
 2. **Static Visualization** (`script_2_viz.py`): Converts FSM JSON to Graphviz flowchart → `flowchart.png` + DOT source
 3. **Interactive Visualization** (`script_viz_interactive.py`): Creates pre-positioned NetworkX graph with PyVis rendering → `flowchart_interactive.html`
-4. **Path Analysis** (`script_3_ana.py`): Finds all paths through FSM, clusters into archetypes (P0), major variations (P1), minor differences (P2) → `clustered_flow_report.txt` + `.xlsx`
+4. **Path Analysis & Prioritization** (`script_3_ana.py`): Finds all paths through FSM, uses Greedy Set-Cover Algorithm to prioritize into 4 buckets → `clustered_flow_report.txt` + `.xlsx`
+   - **P0 (Base Paths)**: Unique conversation archetypes - core flows
+   - **P1 (Logic Variations)**: Paths covering new edge logic not in P0
+   - **P2 (Loop Tests)**: Paths testing self-loop transitions
+   - **P3 (Supplemental)**: Redundant paths fully covered by P0/P1/P2
 
 **Key Parameters:**
-- Clustering thresholds: P2 (95% similarity), P1 (70% similarity)
+- Clustering thresholds: P2 (95% similarity), P1 (70% similarity) - used for initial grouping before prioritization
 - Entry/Exit states: `STATE_GREETING` → `STATE_END_CONVERSATION`
 
 ## Architecture
@@ -27,12 +31,23 @@ Sequential steps:
 - **DatabaseClient** (`utils/database_client.py`): Singleton Supabase client for persistent storage
 - **HistoryManager** (`utils/history_manager.py`): Database CRUD for run history (PostgreSQL)
 - **HistoryService** (`services/history_service.py`): Business logic for saving/loading runs
-  - `save_current_run()` → returns dict with Supabase URLs (`flowchart_png_path`, `flowchart_html_path`, `excel_report_path`) and text content (`flowchart_dot_path`, `report_text`)
+  - `save_current_run()` → handles both `PriorityPathCollection` (new) and `List[Cluster]` (legacy) formats
+  - `load_run_data()` → auto-detects format from report text (`'=== [P0] GOLDEN PATHS'` marker) and uses appropriate parser
+  - Returns `is_priority_mode` flag to enable conditional UI rendering
   - Uploads files to Supabase Storage (PNG, HTML, XLSX), deletes local `outputs/{session_id}/`
-- **StreamingService**, **VisualizationService**, **AnalysisService**: Wrap pipeline scripts with session-based file operations
+- **StreamingService**, **VisualizationService**: Wrap pipeline scripts with session-based file operations
+- **AnalysisService** (`services/analysis_service.py`): Wraps `script_3_ana.py` with dual-mode architecture
+  - Returns tuple: `(PriorityPathCollection, report_path)`
+  - Converts raw dict from `prioritize_paths()` to structured `PriorityPathCollection` objects
+  - Method `_dict_to_priority_collection()` transforms path_data dicts into `PriorityPath` objects
 - **InteractiveVisualizationService** (`services/interactive_visualization_service.py`): Wraps `script_viz_interactive.py`, generates HTML in temp location then moves to session directory
-- **ExcelService**: Generates `.xlsx` exports (non-fatal failures)
-- **ReportParser**: Parses text reports into structured `Cluster` objects
+- **ExcelService** (`services/excel_service.py`): Generates `.xlsx` exports with dual-mode support
+  - `generate_excel()` (legacy): Creates one sheet per archetype with interleaved P0/P1/P2 columns
+  - `generate_excel_priority()` (new): Creates 4 separate tabs (P0_Base_Paths, P1_Logic_Variations, P2_Loops, P3_Supplemental)
+  - Non-fatal failures - errors stored in session state
+- **ReportParser** (`services/report_parser.py`): Contains all data models and parsers
+  - **Legacy**: `Cluster`, `Path`, `PathSegment`, `ReportParser` (archetype-based format)
+  - **New**: `PriorityPath`, `PriorityPathCollection`, `PriorityReportParser` (priority-based format)
 
 ### UI Components
 
@@ -42,6 +57,14 @@ Sequential steps:
   - Fetches HTML once (via HTTP for Supabase URLs, file read for local)
   - **Optimized**: Reuses fetched content for both iframe and download (no duplicate requests)
   - Provides `st.download_button()` for both modes (forces browser download with `Content-Disposition: attachment` headers)
+- **results_zone** (`components/results_zone.py`): Dual rendering functions for path analysis
+  - `render_results_zone()` (legacy): Hierarchical archetype display with nested P1/P2 expandables
+  - `render_results_zone_priority()` (new): Flat priority sections (P0, P1, P2, P3) with metrics dashboard
+  - Conditional dispatch based on `st.session_state.is_priority_mode` flag
+  - Header shows total path count: "Conversation Path Analysis (X)"
+- **save_dialog** (`components/save_dialog.py`): Polymorphic metrics display
+  - Handles both `PriorityPathCollection` and `List[Cluster]` formats using `hasattr(parsed_clusters, 'stats')` check
+  - Shows "Archetypes/P0" and "Total Paths" correctly for both formats
 
 ### Main Application (`app.py`)
 
@@ -54,7 +77,9 @@ Sequential steps:
 1. LLM Output: Thinking console + cost metrics + JSON output
 2. Flowchart: Static PNG visualization + DOT source
 3. Interactive: Embeds HTML visualization with drag/zoom controls
-4. Clustered Paths: Path analysis report + Excel download
+4. Clustered Paths: Priority-based path analysis with 4-metric dashboard (P0/P1/P2/P3 counts) + Excel download
+   - **New runs**: Flat priority sections (P0: Base Paths, P1: Logic Variations, P2: Loop Tests, P3: Supplemental)
+   - **Historical runs**: Auto-detected format (priority or archetype-based)
 
 **Save Flow:**
 1. User clicks "Save to History" → Files uploaded to Supabase Storage (PNG, HTML, XLSX)
@@ -79,8 +104,86 @@ Required for run history persistence. Create:
 
 ## Key Implementation Details
 
-### Session State Path Update After Save
-**Critical Fix**: After saving to history, `save_dialog.py` captures the dict returned by `save_current_run()` and updates session state:
+### Path Prioritization with Greedy Set-Cover Algorithm
+
+**Problem**: Old clustering approach (similarity-based) created too many paths for QA teams to test.
+
+**Solution**: Implemented `prioritize_paths()` in `script_3_ana.py` using Greedy Set-Cover Algorithm to minimize path count while maximizing edge coverage.
+
+**Algorithm Phases**:
+
+1. **Phase 0 - Setup**: Construct universe of all edges (linear + loops) from all clustered paths
+2. **Phase 1 - Golden Paths (P0)**: All archetype representatives (P0s from clustering) are automatically included
+3. **Phase 2 - Greedy Discovery (P1)**: Iteratively select paths that cover the most uncovered linear edges
+   - Score each candidate by count of unique uncovered edges
+   - Tie-breaker: shortest path length
+   - Continue until all linear edges covered or candidates exhausted
+4. **Phase 3 - Loop Stress (P2)**: Select shortest path for each uncovered self-loop
+5. **Phase 4 - Archive (P3)**: All remaining paths (redundant - fully covered by P0/P1/P2)
+
+**Output Structure**:
+```python
+{
+    "final_p0": [path_data, ...],  # Base Paths (Archetypes)
+    "final_p1": [path_data, ...],  # Logic Variations (Greedy Cover)
+    "final_p2": [path_data, ...],  # Loop Stress Tests
+    "final_p3": [path_data, ...],  # Supplemental/Archive
+    "skipped_edges": [...],
+    "skipped_loops": [...],
+    "stats": {"p0_count": int, "p1_count": int, "p2_count": int, "p3_count": int}
+}
+```
+
+**Report Format**: Flat sections instead of hierarchical archetypes
+- Section 1: `=== [P0] GOLDEN PATHS ===` (marker for format detection)
+- Section 2: `=== [P1] REQUIRED VARIATIONS ===`
+- Section 3: `=== [P2] LOOP STRESS TESTS ===`
+- Section 4: `=== [P3] REDUNDANT PATHS ===`
+
+### Dual-Mode Architecture (Backward Compatibility)
+
+**Design**: System supports both legacy (archetype-based) and new (priority-based) formats simultaneously.
+
+**Format Detection**:
+- `HistoryService.load_run_data()` checks for `'=== [P0] GOLDEN PATHS'` in report text
+- Sets `is_priority_mode` flag based on detection result
+- Uses `PriorityReportParser` for new format, `ReportParser` for legacy
+
+**Data Models**:
+- **Legacy**: `Cluster` (hierarchical: P0 archetype with nested P1/P2 lists)
+- **New**: `PriorityPathCollection` (flat: separate lists for P0/P1/P2/P3)
+
+**Service Layer**:
+- `script_3_ana.py` returns tuple: `(prioritized_dict, report_path)` instead of just string
+- `AnalysisService` converts dict → `PriorityPathCollection`
+- `HistoryService` handles both formats polymorphically using `hasattr(parsed_clusters, 'stats')`
+
+**UI Rendering**:
+- Conditional dispatch in `app.py` based on `is_priority_mode` flag
+- New runs: `render_results_zone_priority()` with flat P0/P1/P2/P3 sections
+- Historical runs: Auto-detected format → appropriate rendering function
+
+**Excel Generation**:
+- Legacy: `generate_excel()` → One sheet per archetype, interleaved columns
+- New: `generate_excel_priority()` → 4 separate tabs (P0_Base_Paths, P1_Logic_Variations, P2_Loops, P3_Supplemental)
+
+**Naming Conventions**:
+- P0: **Base Paths** (core conversation archetypes)
+- P1: **Logic Variations** (major variations covering new edges)
+- P2: **Loop Tests** (self-loop stress tests)
+- P3: **Supplemental Paths** (redundant/archive)
+
+### Session State Management
+
+**Format Flag** (`utils/session_state.py`):
+- `is_priority_mode` (bool): Tracks whether current run uses priority-based or archetype-based format
+- Defaults to `False` for backward compatibility
+- Set to `True` for new runs after analysis completes
+- Loaded from database for historical runs via format auto-detection
+- Used for conditional dispatch to correct rendering/Excel functions
+
+**Path Update After Save**:
+After saving to history, `save_dialog.py` captures the dict returned by `save_current_run()` and updates session state:
 - `flowchart_png_path` → Supabase Storage URL
 - `flowchart_html_path` → Supabase Storage URL (interactive visualization)
 - `flowchart_dot_path` → DOT source text content
@@ -159,17 +262,19 @@ streamlit run app.py
 model="claude-opus-4-5-20251101"
 ```
 
-**Adjust clustering** (`script_3_ana.py:72-74`):
+**Adjust clustering thresholds** (`script_3_ana.py:63-64`):
 ```python
-THRESHOLD_P2_IDENTICAL = 0.95
+THRESHOLD_P2_IDENTICAL = 0.95  # Initial clustering before prioritization
 THRESHOLD_P1_VARIATION = 0.7
 ```
 
-**Change start/end states** (`script_3_ana.py:225-226`):
+**Change start/end states** (`script_3_ana.py:67-68`):
 ```python
-start_node = "STATE_GREETING"
-end_node = "STATE_END_CONVERSATION"
+_START_NODE = "STATE_GREETING"
+_END_NODE = "STATE_END_CONVERSATION"
 ```
+
+**Note**: The Greedy Set-Cover prioritization logic runs automatically after clustering. Adjust clustering thresholds to control initial grouping before prioritization.
 
 ## Project Structure
 
@@ -190,7 +295,11 @@ QA_Eval/
 - **Script 1 (Generation)**: Validates non-empty output, checks JSON structure
 - **Script 2 (Static Viz)**: Filters invalid transitions, saves diagnostic JSON on failure. Supports parallel edges via Graphviz.
 - **Script 3 (Interactive Viz)**: Uses MultiDiGraph for parallel edge support, dynamic smoothing for visual distinction. Non-fatal - pipeline continues, error shown in UI tab.
-- **Script 4 (Analysis)**: Validates DOT format, handles disconnected graphs
+- **Script 4 (Analysis & Prioritization)**:
+  - Validates DOT format, handles disconnected graphs
+  - Returns tuple `(prioritized_dict, report_path)` instead of just string
+  - Clustering phase creates archetypes, then prioritization phase applies Greedy Set-Cover
+  - Skipped edges/loops tracked and reported in warning section
 - **Master Pipeline CLI**: Fail-fast mode (subprocess with `check=True`)
 
 **Non-Fatal Failures (Web UI):**

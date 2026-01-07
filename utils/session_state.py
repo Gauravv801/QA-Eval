@@ -79,6 +79,9 @@ class SessionStateManager:
         if 'parsed_clusters' not in st.session_state:
             st.session_state.parsed_clusters = None
 
+        if 'is_priority_mode' not in st.session_state:
+            st.session_state.is_priority_mode = False  # Default to legacy for backward compatibility
+
         if 'excel_report_path' not in st.session_state:
             st.session_state.excel_report_path = None
 
@@ -155,6 +158,7 @@ class SessionStateManager:
         st.session_state.flowchart_html_path = None
         st.session_state.report_path = None
         st.session_state.parsed_clusters = None
+        st.session_state.is_priority_mode = False  # Reset to legacy mode
         st.session_state.excel_report_path = None
         st.session_state.excel_error = None
         st.session_state.active_tab = "llm_output"

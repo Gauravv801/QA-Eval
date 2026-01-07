@@ -108,7 +108,24 @@ class HistoryService:
             else:
                 excel_report_path = None
 
-            # Compute metadata
+            # Compute metadata - handle both PriorityPathCollection and List[Cluster]
+            if hasattr(parsed_clusters, 'stats'):
+                # New format (PriorityPathCollection)
+                num_archetypes = parsed_clusters.stats['p0_count']
+                num_total_paths = (
+                    parsed_clusters.stats['p0_count'] +
+                    parsed_clusters.stats['p1_count'] +
+                    parsed_clusters.stats['p2_count'] +
+                    parsed_clusters.stats['p3_count']
+                )
+            else:
+                # Legacy format (List[Cluster])
+                num_archetypes = len(parsed_clusters)
+                num_total_paths = sum(
+                    1 + len(c.p1_paths) + len(c.p2_paths)
+                    for c in parsed_clusters
+                )
+
             metadata = {
                 "session_id": session_id,
                 "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -116,11 +133,8 @@ class HistoryService:
                 "fsm_instructions_preview": fsm_instructions[:100] if len(fsm_instructions) > 100 else fsm_instructions,
                 "notes": notes,
                 "total_cost_usd": float(cost_metrics.get('total_cost_usd', 0.0)),
-                "num_archetypes": len(parsed_clusters),
-                "num_total_paths": sum(
-                    1 + len(c.p1_paths) + len(c.p2_paths)
-                    for c in parsed_clusters
-                ),
+                "num_archetypes": num_archetypes,
+                "num_total_paths": num_total_paths,
                 # Full text fields
                 "agent_prompt_full": agent_prompt,
                 "fsm_instructions_full": fsm_instructions,
@@ -231,7 +245,18 @@ class HistoryService:
             tmp.write(run_data['clustered_flow_report'])
             report_path = tmp.name
 
-        parsed_clusters = ReportParser(report_path).parse()
+        # Auto-detect format from report text
+        report_text = run_data['clustered_flow_report']
+        is_priority_mode = '=== [P0] GOLDEN PATHS' in report_text  # New format marker
+
+        if is_priority_mode:
+            # New priority-based format
+            from services.report_parser import PriorityReportParser
+            parser = PriorityReportParser(report_path)
+            parsed_clusters = parser.parse()
+        else:
+            # Legacy archetype-based format
+            parsed_clusters = ReportParser(report_path).parse()
 
         # Return data in expected format
         return {
@@ -244,6 +269,7 @@ class HistoryService:
             'report_path': report_path,  # Temp file path
             'excel_report_path': run_data.get('excel_report_path'),  # Public URL
             'parsed_clusters': parsed_clusters,
+            'is_priority_mode': is_priority_mode,  # NEW: Critical for rendering
             'agent_prompt': run_data['agent_prompt_full'],
             'fsm_instructions': run_data['fsm_instructions_full']
         }

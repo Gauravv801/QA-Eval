@@ -265,3 +265,86 @@ class ExcelService:
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
 
         return output_path
+
+    def generate_excel_priority(self, priority_collection, vocabulary_json: dict = None) -> str:
+        """
+        Generate Excel file with 4 priority tabs (P0: Base Paths, P1: Logic Variations, P2: Loops, P3: Supplemental).
+
+        Args:
+            priority_collection: PriorityPathCollection object
+            vocabulary_json: Optional dict from output.json with vocabulary
+
+        Returns:
+            str: Absolute path to generated .xlsx file
+
+        Raises:
+            ValueError: If priority_collection is empty or invalid
+            RuntimeError: If Excel generation fails
+        """
+        if not priority_collection:
+            raise ValueError("No priority collection provided for Excel export")
+
+        output_path = self.file_manager.get_path('clustered_flow_report.xlsx')
+
+        try:
+            return self._create_excel_from_priority(priority_collection, output_path, vocabulary_json)
+        except Exception as e:
+            raise RuntimeError(f"Excel generation failed: {str(e)}") from e
+
+    def _create_excel_from_priority(self, priority_collection, output_path: str, vocabulary_json: dict = None) -> str:
+        """
+        Internal method to create Excel workbook with 4 tabs.
+
+        Tab structure:
+        - P0_Base_Paths: Columns [Flow, Description, Blank, Flow, Description, Blank, ...]
+        - P1_Logic_Variations: Same structure
+        - P2_Loops: Same structure
+        - P3_Supplemental: Same structure
+        """
+        description_lookup = build_description_lookup(vocabulary_json) if vocabulary_json else {}
+
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            # Define tab configuration
+            tabs_config = [
+                ('P0_Base_Paths', priority_collection.p0_paths),
+                ('P1_Logic_Variations', priority_collection.p1_paths),
+                ('P2_Loops', priority_collection.p2_paths),
+                ('P3_Supplemental', priority_collection.p3_paths)
+            ]
+
+            for tab_name, path_list in tabs_config:
+                data = {}
+                all_column_names = []
+
+                # Add columns for each path (Flow + Description + Blank separator)
+                for priority_path in path_list:
+                    col_prefix = f"{priority_path.priority_level}.{priority_path.path_index}"
+                    col_flow = col_prefix
+                    col_desc = f"{col_prefix}_Desc"
+                    col_blank = f"{col_prefix}_Blank"
+
+                    # Flatten path to vertical lists
+                    flow_list, desc_list = flatten_path_with_descriptions(
+                        priority_path.segments,
+                        description_lookup
+                    )
+
+                    data[col_flow] = flow_list
+                    data[col_desc] = desc_list
+                    data[col_blank] = [None] * len(flow_list)
+
+                    all_column_names.extend([col_flow, col_desc, col_blank])
+
+                # Pad all columns to same length
+                if data:
+                    max_length = max(len(col) for col in data.values())
+                    for col_name in data:
+                        current_length = len(data[col_name])
+                        if current_length < max_length:
+                            data[col_name] = data[col_name] + [None] * (max_length - current_length)
+
+                # Create DataFrame and write
+                df = pd.DataFrame(data, columns=all_column_names) if data else pd.DataFrame()
+                df.to_excel(writer, sheet_name=sanitize_sheet_name(tab_name), index=False)
+
+        return output_path

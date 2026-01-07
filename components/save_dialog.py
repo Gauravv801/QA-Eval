@@ -35,14 +35,31 @@ def show_save_dialog(session_id, agent_prompt, fsm_instructions,
         st.metric("Total Cost", f"${cost:.4f}")
 
     with col2:
-        num_archetypes = len(parsed_clusters)
-        st.metric("Archetypes", num_archetypes)
+        # Handle both PriorityPathCollection and List[Cluster]
+        if hasattr(parsed_clusters, 'stats'):
+            # New format (PriorityPathCollection)
+            num_archetypes = parsed_clusters.stats['p0_count']
+        else:
+            # Legacy format (List[Cluster])
+            num_archetypes = len(parsed_clusters)
+        st.metric("Archetypes/P0", num_archetypes)
 
     with col3:
-        num_paths = sum(
-            1 + len(c.p1_paths) + len(c.p2_paths)
-            for c in parsed_clusters
-        )
+        # Handle both formats
+        if hasattr(parsed_clusters, 'stats'):
+            # New format - sum all priority buckets
+            num_paths = (
+                parsed_clusters.stats['p0_count'] +
+                parsed_clusters.stats['p1_count'] +
+                parsed_clusters.stats['p2_count'] +
+                parsed_clusters.stats['p3_count']
+            )
+        else:
+            # Legacy format
+            num_paths = sum(
+                1 + len(c.p1_paths) + len(c.p2_paths)
+                for c in parsed_clusters
+            )
         st.metric("Total Paths", num_paths)
 
     st.markdown("---")
