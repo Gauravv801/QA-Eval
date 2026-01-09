@@ -13,7 +13,7 @@ import tempfile
 from utils.history_manager import HistoryManager
 from utils.database_client import DatabaseClient
 from utils.file_manager import FileManager
-from services.report_parser import ReportParser
+from services.report_parser import ReportParser, MinimalPriorityStats
 
 
 class HistoryService:
@@ -113,9 +113,18 @@ class HistoryService:
             else:
                 excel_report_path = None
 
-            # Compute metadata - handle three formats: stats dict, PriorityPathCollection, List[Cluster]
-            if isinstance(parsed_clusters, dict):
-                # New optimized format: stats dict only (subprocess mode)
+            # Compute metadata - handle four formats: MinimalPriorityStats, stats dict, PriorityPathCollection, List[Cluster]
+            if isinstance(parsed_clusters, MinimalPriorityStats):
+                # New wrapped format: MinimalPriorityStats object
+                num_archetypes = parsed_clusters.stats['p0_count']
+                num_total_paths = (
+                    parsed_clusters.stats['p0_count'] +
+                    parsed_clusters.stats['p1_count'] +
+                    parsed_clusters.stats['p2_count'] +
+                    parsed_clusters.stats['p3_count']
+                )
+            elif isinstance(parsed_clusters, dict):
+                # Fallback: raw stats dict (backward compatibility)
                 num_archetypes = parsed_clusters['p0_count']
                 num_total_paths = (
                     parsed_clusters['p0_count'] +

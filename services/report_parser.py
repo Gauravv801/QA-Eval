@@ -52,6 +52,29 @@ class PriorityPathCollection:
 
 
 @dataclass
+class MinimalPriorityStats:
+    """
+    Lightweight stats container - stores only counts, not 7k path objects.
+
+    Used for session state to minimize memory usage. Full path data can be
+    parsed on-demand from report file using PriorityReportParser.
+    """
+    stats: Dict[str, int]  # {'p0_count': int, 'p1_count': int, 'p2_count': int, 'p3_count': int}
+    report_path: str  # Reference to TXT file for on-demand parsing
+
+    # Compatibility properties for existing code that expects these attributes
+    @property
+    def skipped_edges(self):
+        """Return empty list for compatibility."""
+        return []
+
+    @property
+    def skipped_loops(self):
+        """Return empty list for compatibility."""
+        return []
+
+
+@dataclass
 class PathElement:
     """Represents a single element in a path (either a state or an action)."""
     text: str
@@ -339,3 +362,44 @@ class PriorityReportParser:
             pass
 
         return (skipped_edges, skipped_loops)
+
+
+def extract_stats_from_report(report_path: str) -> Dict[str, int]:
+    """
+    Extract only statistics from report header without parsing full path data.
+
+    Memory-optimized: Reads only first 500 chars of report file.
+
+    Args:
+        report_path: Path to clustered_flow_report.txt
+
+    Returns:
+        dict: {'p0_count': int, 'p1_count': int, 'p2_count': int, 'p3_count': int}
+
+    Raises:
+        RuntimeError: If stats pattern not found in report header
+    """
+    try:
+        with open(report_path, 'r') as f:
+            header = f.read(500)  # Read only header for stats
+
+        # Pattern: "Total Paths: P0=X | P1=Y | P2=Z | P3=W"
+        stats_pattern = r'P0=(\d+) \| P1=(\d+) \| P2=(\d+) \| P3=(\d+)'
+        match = re.search(stats_pattern, header)
+
+        if match:
+            return {
+                'p0_count': int(match.group(1)),
+                'p1_count': int(match.group(2)),
+                'p2_count': int(match.group(3)),
+                'p3_count': int(match.group(4))
+            }
+        else:
+            raise RuntimeError(
+                f"Failed to extract stats from report: pattern not found in header\n"
+                f"Header preview: {header[:200]}"
+            )
+    except FileNotFoundError:
+        raise RuntimeError(f"Report file not found: {report_path}")
+    except Exception as e:
+        raise RuntimeError(f"Error reading report file: {str(e)}")

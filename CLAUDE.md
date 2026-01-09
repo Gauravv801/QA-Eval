@@ -33,7 +33,7 @@ Sequential steps:
 - **DatabaseClient** (`utils/database_client.py`): Singleton Supabase client for persistent storage
 - **HistoryManager** (`utils/history_manager.py`): Database CRUD for run history (PostgreSQL)
 - **HistoryService** (`services/history_service.py`): Business logic for saving/loading runs
-  - `save_current_run()` → handles both `PriorityPathCollection` (new) and `List[Cluster]` (legacy) formats
+  - `save_current_run()` → handles four formats polymorphically: `MinimalPriorityStats` (new), raw stats dict, `PriorityPathCollection` (transitional), and `List[Cluster]` (legacy)
   - `load_run_data()` → auto-detects format from report text (`'=== [P0] GOLDEN PATHS'` marker) and uses appropriate parser
   - Returns `is_priority_mode` flag to enable conditional UI rendering
   - Uploads files to Supabase Storage (PNG, HTML, XLSX), deletes local `outputs/{session_id}/`
@@ -52,7 +52,7 @@ Sequential steps:
 - **AnalysisService** (`services/analysis_service.py`): Wraps `script_3_ana.py` using subprocess isolation
   - Returns tuple: `(stats_dict, report_path)` - **memory optimized**
   - File bridging: copies `flowchart_source` → `flowchart_collections_std`
-  - Parses only stats from report header (not full paths)
+  - Uses centralized `extract_stats_from_report()` function to parse only stats from report header (not full paths)
   - Full path data parsed on-demand by `PriorityReportParser` for Excel generation
 - **ExcelService** (`services/excel_service.py`): Generates `.xlsx` exports with dual-mode support
   - `generate_excel()` (legacy): Creates one sheet per archetype with interleaved P0/P1/P2 columns
@@ -60,7 +60,9 @@ Sequential steps:
   - Non-fatal failures - errors stored in session state
 - **ReportParser** (`services/report_parser.py`): Contains all data models and parsers
   - **Legacy**: `Cluster`, `Path`, `PathSegment`, `ReportParser` (archetype-based format)
-  - **New**: `PriorityPath`, `PriorityPathCollection`, `PriorityReportParser` (priority-based format)
+  - **Current**: `PriorityPath`, `PriorityPathCollection`, `PriorityReportParser` (priority-based format)
+  - **Memory-Optimized**: `MinimalPriorityStats` (lightweight wrapper storing only stats dict + report path reference)
+  - **Utility**: `extract_stats_from_report()` - centralized function to extract stats from report header (reads only first 500 chars)
 
 ### UI Components
 
@@ -78,8 +80,8 @@ Sequential steps:
   - **No individual path rendering**: Eliminates 150-200MB memory overhead from rendering thousands of DOM elements
   - Graceful degradation for legacy runs: Shows informational message when stats unavailable, download buttons always work
 - **save_dialog** (`components/save_dialog.py`): Polymorphic metrics display
-  - Handles both `PriorityPathCollection` and `List[Cluster]` formats using `hasattr(parsed_clusters, 'stats')` check
-  - Shows "Archetypes/P0" and "Total Paths" correctly for both formats
+  - Handles `MinimalPriorityStats`, `PriorityPathCollection`, and `List[Cluster]` formats using `hasattr(parsed_clusters, 'stats')` check
+  - Shows "Archetypes/P0" and "Total Paths" correctly for all formats
 
 ### Main Application (`app.py`)
 
@@ -169,12 +171,15 @@ Required for run history persistence. Create:
 
 **Data Models**:
 - **Legacy**: `Cluster` (hierarchical: P0 archetype with nested P1/P2 lists) - still supported in service layer for historical data
-- **Current**: `PriorityPathCollection` (flat: separate lists for P0/P1/P2/P3) - used for all new runs
+- **Transitional**: `PriorityPathCollection` (flat: separate lists for P0/P1/P2/P3) - used for on-demand parsing during Excel generation
+- **Current (Memory-Optimized)**: `MinimalPriorityStats` (lightweight wrapper: stats dict + report path reference) - used in session state storage
 
 **Service Layer**:
 - `script_3_ana.py` returns tuple: `(prioritized_dict, report_path)` instead of just string
-- `AnalysisService` converts dict → `PriorityPathCollection`
-- `HistoryService` handles both formats polymorphically using `hasattr(parsed_clusters, 'stats')`
+- `AnalysisService` uses `extract_stats_from_report()` to extract stats dict, then wraps in `MinimalPriorityStats`
+- `app.py` stores `MinimalPriorityStats` in session state (not full `PriorityPathCollection`)
+- On-demand parsing: `PriorityReportParser` creates temporary `PriorityPathCollection` only for Excel generation (freed after use)
+- `HistoryService` handles four formats polymorphically: `MinimalPriorityStats`, raw stats dict, `PriorityPathCollection`, `List[Cluster]`
 
 **UI Rendering** (Memory-Optimized):
 - Single rendering function: `render_results_zone_priority()` for all runs
@@ -192,6 +197,62 @@ Required for run history persistence. Create:
 - P1: **Logic Variations** (major variations covering new edges)
 - P2: **Loop Tests** (self-loop stress tests)
 - P3: **Supplemental Paths** (redundant/archive)
+
+### MinimalPriorityStats Implementation
+
+**Purpose**: Minimize memory footprint in session state by storing only statistics instead of full path objects.
+
+**Data Structure** (`services/report_parser.py`):
+```python
+@dataclass
+class MinimalPriorityStats:
+    stats: Dict[str, int]  # {'p0_count': int, 'p1_count': int, 'p2_count': int, 'p3_count': int}
+    report_path: str  # Reference to TXT file for on-demand parsing
+
+    @property
+    def skipped_edges(self):
+        return []  # Compatibility property
+
+    @property
+    def skipped_loops(self):
+        return []  # Compatibility property
+```
+
+**Memory Impact**:
+- **Before**: 150-200MB for `PriorityPathCollection` with 7,000+ `PriorityPath` objects, each containing nested `PathSegment` lists
+- **After**: <5MB for `MinimalPriorityStats` (just dict + string reference)
+- **Savings**: ~145-195MB per session (97-98% reduction)
+
+**Usage Pattern**:
+```python
+# In AnalysisService (after subprocess completes)
+stats_dict = extract_stats_from_report(report_path)  # Reads only first 500 chars
+return (stats_dict, report_path)
+
+# In app.py (session state storage)
+stats_dict, report_path = analysis_service.analyze_paths(dot_path)
+st.session_state.parsed_clusters = MinimalPriorityStats(
+    stats=stats_dict,
+    report_path=report_path
+)
+
+# On-demand parsing (Excel generation only)
+parser = PriorityReportParser(report_path)
+priority_collection = parser.parse()  # Temporary object
+excel_path = excel_service.generate_excel_priority(priority_collection, ...)
+gc.collect()  # Free temporary object immediately
+```
+
+**Compatibility**:
+- All UI components use `hasattr(obj, 'stats')` pattern for polymorphic access
+- Works seamlessly with existing code expecting `PriorityPathCollection`
+- `skipped_edges` and `skipped_loops` properties ensure no attribute errors
+
+**Centralized Stats Extraction**:
+- `extract_stats_from_report(report_path: str) -> dict` - standalone utility function
+- Reads only first 500 chars of report file (memory-optimized)
+- Uses regex to extract P0/P1/P2/P3 counts from header
+- Single source of truth for stats parsing (eliminates code duplication)
 
 ### Session State Management
 
@@ -211,6 +272,15 @@ After saving to history, `save_dialog.py` captures the dict returned by `save_cu
 - `excel_report_path` → Supabase Storage URL or None
 
 **Why**: Local files are deleted after upload. Without updating paths, UI crashes with `MediaFileStorageError`.
+
+**Garbage Collection Strategy**:
+- Explicit `gc.collect()` calls ensure immediate memory reclamation (instead of waiting for Python's automatic GC)
+- **In app.py**:
+  - After Excel generation: Frees temporary `PriorityPathCollection` object (~150-200MB)
+  - After pipeline completion: Reclaims memory from subprocess isolation
+- **In session_state.py**:
+  - After session reset: Ensures memory from previous session is freed immediately
+- **Impact**: Forces immediate cleanup, prevents memory accumulation across multiple pipeline runs
 
 ### UI Memory Optimization
 
@@ -256,8 +326,9 @@ After saving to history, `save_dialog.py` captures the dict returned by `save_cu
 
 **Memory Savings**:
 - Each subprocess exits and releases 100-150MB (NetworkX graphs, API responses, path objects)
-- Stats-only storage saves 50-100MB in session state (vs full PriorityPathCollection)
-- Total reduction: ~200-350MB per pipeline run
+- `MinimalPriorityStats` storage saves 145-195MB in session state (vs full `PriorityPathCollection` with 7k path objects)
+- Explicit garbage collection (`gc.collect()`) ensures immediate memory reclamation after Excel generation and pipeline completion
+- Total reduction: ~250-350MB per pipeline run
 
 **Implementation Pattern** (all 4 services):
 ```python

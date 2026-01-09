@@ -1,6 +1,7 @@
 import streamlit as st
 import uuid
 import shutil
+import gc
 from pathlib import Path
 
 class SessionStateManager:
@@ -175,3 +176,6 @@ class SessionStateManager:
         # Preserve view_mode unless in history_detail
         if st.session_state.view_mode == 'history_detail':
             st.session_state.view_mode = 'new_run'
+
+        # Force garbage collection after session cleanup
+        gc.collect()

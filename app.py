@@ -1,6 +1,7 @@
 import streamlit as st
 import time
 import re
+import gc
 from dotenv import load_dotenv
 
 # Load environment variables from .env file (must be before other imports)
@@ -13,7 +14,7 @@ from services.visualization_service import VisualizationService
 from services.interactive_visualization_service import InteractiveVisualizationService
 from services.analysis_service import AnalysisService
 from services.excel_service import ExcelService
-from services.report_parser import ReportParser
+from services.report_parser import ReportParser, MinimalPriorityStats
 from services.history_service import HistoryService
 from components.execution_zone import render_thinking_console
 from components.analysis_zone import render_analysis_zone
@@ -318,7 +319,11 @@ else:
                 stats_dict, report_path = analysis_service.analyze_paths(dot_path)
 
                 st.session_state.report_path = report_path
-                st.session_state.parsed_clusters = stats_dict  # Store minimal stats dict instead of full collection
+                # Wrap stats in MinimalPriorityStats for type safety and compatibility
+                st.session_state.parsed_clusters = MinimalPriorityStats(
+                    stats=stats_dict,
+                    report_path=report_path
+                )
                 st.session_state.is_priority_mode = True  # Flag for rendering
 
                 # Generate Excel report using on-demand parsing (memory optimized)
@@ -341,8 +346,16 @@ else:
                     st.session_state.excel_error = str(e)
                     st.session_state.excel_report_path = None
 
+                # Aggressive garbage collection after Excel generation
+                # Frees memory from temporary PriorityPathCollection object
+                gc.collect()
+
             st.session_state.pipeline_running = False
             st.success("Pipeline complete!")
+
+            # Final garbage collection to reclaim memory from subprocess isolation
+            gc.collect()
+
             st.rerun()
 
     # Save to History button (shown after pipeline completes)

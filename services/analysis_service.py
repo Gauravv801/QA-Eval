@@ -3,6 +3,7 @@ import sys
 import os
 import shutil
 import re
+from services.report_parser import extract_stats_from_report
 
 
 class AnalysisService:
@@ -81,7 +82,8 @@ class AnalysisService:
                 )
 
             # Parse ONLY stats from report header (memory optimization)
-            stats_dict = self._parse_stats_from_report(report_path)
+            # Uses centralized function from report_parser
+            stats_dict = extract_stats_from_report(report_path)
 
             return (stats_dict, report_path)
 
@@ -90,39 +92,3 @@ class AnalysisService:
             raise
         except Exception as e:
             raise RuntimeError(f"Unexpected error during path analysis: {str(e)}") from e
-
-    def _parse_stats_from_report(self, report_path: str) -> dict:
-        """
-        Parse ONLY stats from report header to minimize memory usage.
-
-        Full path data can be parsed on-demand using PriorityReportParser.
-
-        Args:
-            report_path: Path to clustered_flow_report.txt
-
-        Returns:
-            dict: {'p0_count': int, 'p1_count': int, 'p2_count': int, 'p3_count': int}
-        """
-        try:
-            with open(report_path, 'r') as f:
-                # Read only first 500 chars (stats are in header)
-                header = f.read(500)
-
-            # Extract stats using regex: P0=X | P1=Y | P2=Z | P3=W
-            stats_pattern = r'P0=(\d+) \| P1=(\d+) \| P2=(\d+) \| P3=(\d+)'
-            match = re.search(stats_pattern, header)
-
-            if match:
-                return {
-                    'p0_count': int(match.group(1)),
-                    'p1_count': int(match.group(2)),
-                    'p2_count': int(match.group(3)),
-                    'p3_count': int(match.group(4))
-                }
-            else:
-                # Graceful degradation - return empty stats if parsing fails
-                return {'p0_count': 0, 'p1_count': 0, 'p2_count': 0, 'p3_count': 0}
-
-        except Exception as e:
-            # Graceful degradation
-            return {'p0_count': 0, 'p1_count': 0, 'p2_count': 0, 'p3_count': 0}
