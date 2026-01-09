@@ -20,7 +20,7 @@ class FileManager:
         """
         self.session_id = session_id
         self.base_location = base_location
-        self.base_dir = Path(f"{base_location}/{session_id}")
+        self.base_dir = Path(base_location).resolve() / session_id
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def get_path(self, filename):

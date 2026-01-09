@@ -73,9 +73,14 @@ class HistoryService:
         try:
             # Load text/JSON data
             output_json = fm.load_json('output.json')
-            thinking_text = fm.load_text('thinking.txt')
             flowchart_dot = fm.load_text('flowchart_source')
             report_text = fm.load_text('clustered_flow_report.txt')
+
+            # Load optional thinking text (not available in subprocess mode)
+            try:
+                thinking_text = fm.load_text('thinking.txt')
+            except FileNotFoundError:
+                thinking_text = ""  # Empty if not available
 
             # Load optional raw response
             try:
@@ -108,9 +113,18 @@ class HistoryService:
             else:
                 excel_report_path = None
 
-            # Compute metadata - handle both PriorityPathCollection and List[Cluster]
-            if hasattr(parsed_clusters, 'stats'):
-                # New format (PriorityPathCollection)
+            # Compute metadata - handle three formats: stats dict, PriorityPathCollection, List[Cluster]
+            if isinstance(parsed_clusters, dict):
+                # New optimized format: stats dict only (subprocess mode)
+                num_archetypes = parsed_clusters['p0_count']
+                num_total_paths = (
+                    parsed_clusters['p0_count'] +
+                    parsed_clusters['p1_count'] +
+                    parsed_clusters['p2_count'] +
+                    parsed_clusters['p3_count']
+                )
+            elif hasattr(parsed_clusters, 'stats'):
+                # PriorityPathCollection object
                 num_archetypes = parsed_clusters.stats['p0_count']
                 num_total_paths = (
                     parsed_clusters.stats['p0_count'] +

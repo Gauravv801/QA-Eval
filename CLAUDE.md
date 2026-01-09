@@ -28,6 +28,8 @@ Sequential steps:
 ### Core Services
 
 - **FileManager** (`utils/file_manager.py`): Session-isolated file operations in `outputs/{session_id}/`
+  - Uses `Path(base_location).resolve()` to ensure absolute paths from initialization
+  - All returned paths are absolute, preventing subprocess path resolution errors
 - **DatabaseClient** (`utils/database_client.py`): Singleton Supabase client for persistent storage
 - **HistoryManager** (`utils/history_manager.py`): Database CRUD for run history (PostgreSQL)
 - **HistoryService** (`services/history_service.py`): Business logic for saving/loading runs
@@ -35,12 +37,23 @@ Sequential steps:
   - `load_run_data()` → auto-detects format from report text (`'=== [P0] GOLDEN PATHS'` marker) and uses appropriate parser
   - Returns `is_priority_mode` flag to enable conditional UI rendering
   - Uploads files to Supabase Storage (PNG, HTML, XLSX), deletes local `outputs/{session_id}/`
-- **StreamingService**, **VisualizationService**: Wrap pipeline scripts with session-based file operations
-- **AnalysisService** (`services/analysis_service.py`): Wraps `script_3_ana.py` with dual-mode architecture
-  - Returns tuple: `(PriorityPathCollection, report_path)`
-  - Converts raw dict from `prioritize_paths()` to structured `PriorityPathCollection` objects
-  - Method `_dict_to_priority_collection()` transforms path_data dicts into `PriorityPath` objects
-- **InteractiveVisualizationService** (`services/interactive_visualization_service.py`): Wraps `script_viz_interactive.py`, generates HTML in temp location then moves to session directory
+- **StreamingService** (`services/streaming_service.py`): Wraps `script_1_gen.py` using subprocess isolation
+  - Uses subprocess execution to isolate memory (100-150MB freed after completion)
+  - Writes `prompt.txt` with system prompt + user message
+  - Reads `output.json` and `cost_metrics.json`
+  - **Trade-off**: Thinking text not available (script doesn't write it in CLI mode)
+  - **Critical**: Uses absolute path to script with `cwd=session_dir` for file I/O
+- **VisualizationService** (`services/visualization_service.py`): Wraps `script_2_viz.py` using subprocess isolation
+  - File bridging: copies `output.json` → `LLM_output_axis.json`
+  - Reads `flowchart_claude.png` and `flowchart_claude` (DOT source)
+- **InteractiveVisualizationService** (`services/interactive_visualization_service.py`): Wraps `script_viz_interactive.py` using subprocess isolation
+  - Reads existing `output.json`, generates `flowchart_interactive.html`
+  - Non-fatal error handling - failures don't block pipeline
+- **AnalysisService** (`services/analysis_service.py`): Wraps `script_3_ana.py` using subprocess isolation
+  - Returns tuple: `(stats_dict, report_path)` - **memory optimized**
+  - File bridging: copies `flowchart_source` → `flowchart_collections_std`
+  - Parses only stats from report header (not full paths)
+  - Full path data parsed on-demand by `PriorityReportParser` for Excel generation
 - **ExcelService** (`services/excel_service.py`): Generates `.xlsx` exports with dual-mode support
   - `generate_excel()` (legacy): Creates one sheet per archetype with interleaved P0/P1/P2 columns
   - `generate_excel_priority()` (new): Creates 4 separate tabs (P0_Base_Paths, P1_Logic_Variations, P2_Loops, P3_Supplemental)
@@ -234,6 +247,81 @@ After saving to history, `save_dialog.py` captures the dict returned by `save_cu
 - Users can no longer browse individual paths interactively in the UI
 - Must download TXT/XLSX reports to view path details
 - Legacy historical runs show "stats unavailable" message instead of path list
+
+### Subprocess Isolation (Layer 1 Optimization)
+
+**Problem**: High memory usage from keeping backend script modules loaded in memory throughout Streamlit session.
+
+**Solution**: Convert service layer from direct function imports to subprocess execution.
+
+**Memory Savings**:
+- Each subprocess exits and releases 100-150MB (NetworkX graphs, API responses, path objects)
+- Stats-only storage saves 50-100MB in session state (vs full PriorityPathCollection)
+- Total reduction: ~200-350MB per pipeline run
+
+**Implementation Pattern** (all 4 services):
+```python
+# Get session directory path
+session_dir = os.path.dirname(self.file_manager.get_path('dummy'))
+
+# Calculate absolute path to script (project root)
+project_root = os.path.dirname(os.path.dirname(session_dir))
+script_path = os.path.join(project_root, 'script_1_gen.py')
+
+# Ensure paths are absolute (defensive - added 2025-01)
+script_path = os.path.abspath(script_path)
+session_dir = os.path.abspath(session_dir)
+
+# Run subprocess with absolute script path
+subprocess.run(
+    [sys.executable, script_path],  # Use absolute path
+    cwd=session_dir,  # Files read/written here
+    check=True,
+    timeout=600,
+    capture_output=True,
+    text=True
+)
+```
+
+**Critical Implementation Details**:
+1. **Absolute Paths Required - Two-Layer Approach**:
+   - **Layer 1 (FileManager)**: Uses `Path(base_location).resolve() / session_id` to create absolute paths at initialization
+     - Converts relative `"outputs"` → absolute `/Users/username/QA_Eval/outputs`
+     - All paths returned by `get_path()` are absolute
+   - **Layer 2 (Services - Defensive)**: Each service explicitly calls `os.path.abspath()` on script_path and session_dir before subprocess
+     - Guards against edge cases where paths might still be relative
+     - Ensures subprocess always receives absolute paths regardless of working directory
+   - **Why both layers**: FileManager fix solves root cause; defensive conversion provides fail-safe
+   - `cwd=session_dir` changes working directory to `outputs/{session_id}/`
+   - Without absolute script_path, subprocess would look in session dir → FileNotFoundError
+   - Absolute path `project_root/script_1_gen.py` works correctly from any working directory
+2. **File Bridging**: Scripts expect specific input filenames
+   - Script 1: reads `prompt.txt`, writes `output.json` + `cost_metrics.json`
+   - Script 2: reads `LLM_output_axis.json`, writes `flowchart_claude.png` + `flowchart_claude`
+   - Script 3 (interactive): reads `output.json`, writes `flowchart_interactive.html`
+   - Script 4 (analysis): reads `flowchart_collections_std`, writes `clustered_flow_report.txt`
+3. **Working Directory**: `cwd=session_dir` ensures input/output files are in session directory
+4. **Process Isolation**: Each script runs in separate process, exits after completion
+
+**Trade-offs**:
+- **Thinking text unavailable**: `script_1_gen.py` doesn't write thinking to file in CLI mode
+- **No real-time streaming**: Subprocess blocks until completion
+- **Acceptable**: JSON output, cost metrics, visualizations, and analysis fully preserved
+
+**Services Modified**:
+- `StreamingService`: Subprocess for `script_1_gen.py` (FSM generation)
+- `VisualizationService`: Subprocess for `script_2_viz.py` (static flowchart)
+- `InteractiveVisualizationService`: Subprocess for `script_viz_interactive.py` (interactive HTML)
+- `AnalysisService`: Subprocess for `script_3_ana.py` (path analysis)
+
+**App.py Changes**:
+- Stores stats dict instead of full `PriorityPathCollection` (memory optimization)
+- Parses full report on-demand using `PriorityReportParser` for Excel generation
+- Handles missing `thinking.txt` gracefully with informational messages
+
+**HistoryService Changes**:
+- Handles three formats: stats dict (new), `PriorityPathCollection` (transitional), `List[Cluster]` (legacy)
+- Makes `thinking.txt` optional (defaults to empty string if not found)
 
 ### Run History Persistence
 - **Storage**: Supabase PostgreSQL (metadata/text/JSON) + Storage bucket (PNG/HTML/XLSX files)

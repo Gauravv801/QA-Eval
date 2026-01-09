@@ -135,6 +135,10 @@ elif st.session_state.view_mode == 'history_detail':
             if st.session_state.thinking_text:
                 render_thinking_console(st.session_state.thinking_text,
                                        container_id="historical-thinking")
+            else:
+                st.info("💡 **Thinking output not available** for this run.\n\n"
+                       "This run may have been generated using subprocess isolation or thinking text was not saved.")
+
             if st.session_state.cost_metrics:
                 render_analysis_zone(st.session_state.cost_metrics,
                                     st.session_state.output_json)
@@ -263,9 +267,8 @@ else:
                     st.session_state.output_json = json_data
                     st.session_state.cost_metrics = cost_data
 
-                    # Final render with complete thinking
-                    with thinking_container:
-                        render_thinking_console(st.session_state.thinking_text, container_id="thinking-console-final")
+                    # Note: Thinking text not available in subprocess mode
+                    # thinking_text remains empty (initialized in session_state.py)
 
                 except ValueError as e:
                     st.error(f"**Generation Failed**: {str(e)}")
@@ -311,16 +314,21 @@ else:
             analysis_service = AnalysisService(file_manager)
 
             with st.spinner("Analyzing conversation paths..."):
-                # NEW: analyze_paths now returns tuple (priority_collection, report_path)
-                priority_collection, report_path = analysis_service.analyze_paths(dot_path)
+                # NEW: analyze_paths now returns tuple (stats_dict, report_path) - memory optimized
+                stats_dict, report_path = analysis_service.analyze_paths(dot_path)
 
                 st.session_state.report_path = report_path
-                st.session_state.parsed_clusters = priority_collection  # Now PriorityPathCollection
+                st.session_state.parsed_clusters = stats_dict  # Store minimal stats dict instead of full collection
                 st.session_state.is_priority_mode = True  # Flag for rendering
 
-                # Generate Excel report using new priority method
+                # Generate Excel report using on-demand parsing (memory optimized)
                 excel_service = ExcelService(file_manager)
                 try:
+                    # Parse full report on-demand for Excel generation
+                    from services.report_parser import PriorityReportParser
+                    parser = PriorityReportParser(report_path)
+                    priority_collection = parser.parse()  # Temporary object, freed after Excel generation
+
                     excel_path = excel_service.generate_excel_priority(
                         priority_collection,
                         st.session_state.output_json
@@ -360,6 +368,10 @@ else:
             # Thinking Console
             if st.session_state.thinking_text:
                 render_thinking_console(st.session_state.thinking_text, container_id="thinking-console-static")
+            else:
+                st.info("💡 **Thinking output not available** (subprocess mode).\n\n"
+                       "Thinking text is not captured when using subprocess isolation for memory optimization. "
+                       "JSON output and cost metrics are fully preserved below.")
 
             # Analysis Zone (KPI + JSON)
             if st.session_state.cost_metrics:

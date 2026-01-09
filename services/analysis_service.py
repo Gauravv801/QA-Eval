@@ -1,6 +1,8 @@
-from typing import List
-from script_3_ana import generate_path_analysis
-from services.report_parser import PriorityReportParser, PriorityPathCollection, PathSegment, PriorityPath
+import subprocess
+import sys
+import os
+import shutil
+import re
 
 
 class AnalysisService:
@@ -9,69 +11,118 @@ class AnalysisService:
 
     def analyze_paths(self, dot_source_path, start_node='STATE_GREETING', end_node='STATE_END_CONVERSATION'):
         """
-        Wrapper around script_3_ana.generate_path_analysis with session-based output.
+        Wrapper around script_3_ana.py using subprocess for process isolation.
 
-        Returns:
-            tuple: (parsed_priority_collection, report_path)
-                - parsed_priority_collection: PriorityPathCollection object
-                - report_path: str path to text report file
-        """
-        report_path = self.file_manager.get_path('clustered_flow_report.txt')
-
-        # Call script function - now returns tuple
-        prioritized_dict, report_path = generate_path_analysis(dot_source_path, report_path, start_node, end_node)
-
-        # Convert dictionary to structured data model
-        parsed_collection = self._dict_to_priority_collection(prioritized_dict)
-
-        return (parsed_collection, report_path)
-
-    def _dict_to_priority_collection(self, prioritized_dict: dict) -> PriorityPathCollection:
-        """
-        Convert prioritized dictionary from script to PriorityPathCollection.
+        Returns minimal stats dict instead of full PriorityPathCollection to reduce memory usage.
+        Full path data can be parsed on-demand from the report file using PriorityReportParser.
 
         Args:
-            prioritized_dict: Dictionary with 'final_p0', 'final_p1', etc.
+            dot_source_path: Path to DOT source file (flowchart_source)
+            start_node: Starting state name
+            end_node: Ending state name
 
         Returns:
-            PriorityPathCollection with structured PriorityPath objects
+            tuple: (stats_dict, report_path)
+                - stats_dict: {'p0_count': int, 'p1_count': int, 'p2_count': int, 'p3_count': int}
+                - report_path: str path to text report file
         """
-        def _convert_path_list(path_data_list, priority_level):
-            """Convert list of path_data dicts to PriorityPath objects."""
-            result = []
-            for i, path_data in enumerate(path_data_list, start=1):
-                # path_data = {'raw': [(src, tgt, action), ...], 'signature': [...], 'length': int}
-                segments = self._tuples_to_segments(path_data['raw'])
-                priority_path = PriorityPath(
-                    priority_level=priority_level,
-                    path_index=i,
-                    segments=segments,
-                    length=path_data['length'],
-                    raw_tuples=path_data['raw'],
-                    signature=path_data['signature']
+        try:
+            # Get session directory path
+            session_dir = os.path.dirname(self.file_manager.get_path('dummy'))
+
+            # Calculate absolute path to script (project root)
+            project_root = os.path.dirname(os.path.dirname(session_dir))
+            script_path = os.path.join(project_root, 'script_3_ana.py')
+
+            # Ensure paths are absolute (defensive)
+            script_path = os.path.abspath(script_path)
+            session_dir = os.path.abspath(session_dir)
+
+            # File bridging: Copy flowchart_source → flowchart_collections_std (expected by script_3_ana.py)
+            flowchart_collections_path = os.path.join(session_dir, 'flowchart_collections_std')
+
+            if not os.path.exists(dot_source_path):
+                raise RuntimeError(
+                    f"DOT source file not found at {dot_source_path}. "
+                    "Run flowchart generation (script 2) first."
                 )
-                result.append(priority_path)
-            return result
 
-        return PriorityPathCollection(
-            p0_paths=_convert_path_list(prioritized_dict['final_p0'], 'P0'),
-            p1_paths=_convert_path_list(prioritized_dict['final_p1'], 'P1'),
-            p2_paths=_convert_path_list(prioritized_dict['final_p2'], 'P2'),
-            p3_paths=_convert_path_list(prioritized_dict['final_p3'], 'P3'),
-            skipped_edges=prioritized_dict['skipped_edges'],
-            skipped_loops=prioritized_dict['skipped_loops'],
-            stats=prioritized_dict['stats']
-        )
+            shutil.copy(dot_source_path, flowchart_collections_path)
 
-    def _tuples_to_segments(self, raw_tuples) -> List[PathSegment]:
-        """Convert raw tuple format to PathSegment objects."""
-        segments = []
-        for src, tgt, action in raw_tuples:
-            segments.append(PathSegment(
-                source=src,
-                target=tgt,
-                action=action,
-                tag=None,
-                tag_type=None
-            ))
-        return segments
+            # Run subprocess
+            try:
+                subprocess.run(
+                    [sys.executable, script_path],
+                    cwd=session_dir,
+                    check=True,
+                    timeout=600,
+                    capture_output=True,
+                    text=True
+                )
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError(
+                    f"Path analysis timed out after 600 seconds. "
+                    f"This may indicate a very complex FSM graph."
+                ) from e
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(
+                    f"Path analysis subprocess failed with exit code {e.returncode}.\n"
+                    f"stderr: {e.stderr}\n"
+                    f"stdout: {e.stdout}"
+                ) from e
+
+            # Read report file
+            report_path = self.file_manager.get_path('clustered_flow_report.txt')
+
+            if not os.path.exists(report_path):
+                raise RuntimeError(
+                    "Script did not generate clustered_flow_report.txt. "
+                    "Path analysis may have failed."
+                )
+
+            # Parse ONLY stats from report header (memory optimization)
+            stats_dict = self._parse_stats_from_report(report_path)
+
+            return (stats_dict, report_path)
+
+        except RuntimeError as e:
+            # Re-raise subprocess errors
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during path analysis: {str(e)}") from e
+
+    def _parse_stats_from_report(self, report_path: str) -> dict:
+        """
+        Parse ONLY stats from report header to minimize memory usage.
+
+        Full path data can be parsed on-demand using PriorityReportParser.
+
+        Args:
+            report_path: Path to clustered_flow_report.txt
+
+        Returns:
+            dict: {'p0_count': int, 'p1_count': int, 'p2_count': int, 'p3_count': int}
+        """
+        try:
+            with open(report_path, 'r') as f:
+                # Read only first 500 chars (stats are in header)
+                header = f.read(500)
+
+            # Extract stats using regex: P0=X | P1=Y | P2=Z | P3=W
+            stats_pattern = r'P0=(\d+) \| P1=(\d+) \| P2=(\d+) \| P3=(\d+)'
+            match = re.search(stats_pattern, header)
+
+            if match:
+                return {
+                    'p0_count': int(match.group(1)),
+                    'p1_count': int(match.group(2)),
+                    'p2_count': int(match.group(3)),
+                    'p3_count': int(match.group(4))
+                }
+            else:
+                # Graceful degradation - return empty stats if parsing fails
+                return {'p0_count': 0, 'p1_count': 0, 'p2_count': 0, 'p3_count': 0}
+
+        except Exception as e:
+            # Graceful degradation
+            return {'p0_count': 0, 'p1_count': 0, 'p2_count': 0, 'p3_count': 0}
