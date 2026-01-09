@@ -19,7 +19,7 @@ from components.execution_zone import render_thinking_console
 from components.analysis_zone import render_analysis_zone
 from components.visual_zone import render_visual_zone
 from components.interactive_zone import render_interactive_zone
-from components.results_zone import render_results_zone
+from components.results_zone import render_results_zone_priority
 from components.top_navigation import render_top_navigation
 from components.history_table import render_history_table, format_datetime
 from components.save_dialog import show_save_dialog
@@ -152,14 +152,8 @@ elif st.session_state.view_mode == 'history_detail':
 
         with tab4:
             if st.session_state.parsed_clusters:
-                # Conditional rendering based on format
-                if st.session_state.is_priority_mode:
-                    from components.results_zone import render_results_zone_priority
-                    render_results_zone_priority(st.session_state.parsed_clusters,
-                                                st.session_state.report_path)
-                else:
-                    render_results_zone(st.session_state.parsed_clusters,
-                                       st.session_state.report_path)
+                render_results_zone_priority(st.session_state.parsed_clusters,
+                                            st.session_state.report_path)
 
     except FileNotFoundError:
         st.error("Run data not found. Directory may have been deleted.")
@@ -392,12 +386,7 @@ else:
         with tab4:
             # Results Zone (Clustered Paths)
             if st.session_state.parsed_clusters:
-                # Conditional rendering based on format
-                if st.session_state.is_priority_mode:
-                    from components.results_zone import render_results_zone_priority
-                    render_results_zone_priority(st.session_state.parsed_clusters, st.session_state.report_path)
-                else:
-                    render_results_zone(st.session_state.parsed_clusters, st.session_state.report_path)
+                render_results_zone_priority(st.session_state.parsed_clusters, st.session_state.report_path)
             else:
                 st.info("Waiting for path analysis... Complete Step 2 first.")
 
